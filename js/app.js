@@ -188,12 +188,9 @@ const brg = () => window.BRGYS.find(b => b.n === (S.loc || {}).brgy) || window.B
 const feeOf = r => brg().fee, etaOf = r => [r.eta[0] + brg().eta + (r.busy || 0), r.eta[1] + brg().eta + (r.busy || 0)];
 const iso = d => new Date(d).toISOString();
 function seed() {
-  const mk = (id, rid, items, daysAgo, st) => { const sub = items.reduce((a, x) => a + x.unit * x.qty, 0), fee = 30;
-    return { id, rid, items, sub, fee, disc: 0, total: sub + fee, createdAt: Date.now() - daysAgo * 864e5, demo: false, stage: 5, notified: 5, upd: 0, status: st || 'active', pay: { method: 'cod', status: 'paid', ref: '', demo: false }, addr: 'Home — Purok 1, Poblacion, Alegria', contact: { name: 'Tommy', phone: '09171234567' } }; };
-  const L = (iid, q, sel) => { const { item } = ITEM(iid); return { key: uid('l'), itemId: iid, name: item.name, img: item.img, qty: q, unit: item.price, sel: sel || {}, note: '' }; };
   return { v: 1, user: { id: 'demo', name: 'Tommy', email: 'tommy@example.com', phone: '09171234567', photo: '', in: false }, users: {}, recent: [],
-    cart: { rid: null, lines: [] }, fav: { items: ['bulalo2', 'tonkotsu'], rests: ['kentkaye'] }, promo: null,
-    orders: [mk('FD-482913', 'kentkaye', [L('bulalo2', 1), L('garlicrice', 2)], 3), mk('FD-471206', 'conchita', [L('tonkotsu', 2)], 9), mk('FD-460118', 'conchita', [L('halohalo', 2)], 16, 'cancelled')],
+    cart: { rid: null, lines: [] }, fav: { items: [], rests: [] }, promo: null,
+    orders: [],
     cater: [],
     notes: [{ id: 'n1', type: 'promo', t: 'Catering for your next event', b: 'Request trays or a full buffet for 10–50 guests.', at: Date.now() - 36e5, read: false },
             { id: 'n2', type: 'account', t: 'Welcome to Papalita', b: 'Pick your barangay so we can show the right delivery fee.', at: Date.now() - 864e5, read: true }],
