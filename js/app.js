@@ -3,6 +3,20 @@
 // Papalita startup fix - 2026-10-26
 (async () => {
 'use strict';
+// Capture Chrome's install event immediately, before the async Supabase catalogue loads.
+let INSTALL = null;
+let PAPALITA_INSTALLED = window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+window.addEventListener('beforeinstallprompt', event => {
+  event.preventDefault();
+  INSTALL = event;
+  // Home UI is refreshed at boot; refresh here too when already loaded.
+  if (typeof S !== 'undefined' && S?.user?.in && typeof curPath === 'function' && curPath() === '/') render();
+});
+window.addEventListener('appinstalled', () => {
+  PAPALITA_INSTALLED = true;
+  INSTALL = null;
+  if (typeof S !== 'undefined' && S?.user?.in && typeof curPath === 'function' && curPath() === '/') render();
+});
 const C = window.FOODIE_CONFIG, RS = window.RESTAURANTS, CATS = window.CATEGORIES;
 // Load the online catalogue before rendering the customer menu.
 try {
@@ -926,17 +940,31 @@ hideagain: b => {
   logout: () => confirmDlg('Log out of Papalita?', 'Log out').then(async ok => { if (ok) { await authDB().auth.signOut(); S.user.in = false; clearSession(); save(); AU.view = 'login'; render(); } }),
   clrrecent: () => { S.recent = []; save(); const g = $('#sg'); g && (g.innerHTML = ''); },
   install: async () => {
+    if (PAPALITA_INSTALLED || window.matchMedia('(display-mode: standalone)').matches) {
+      toast('Papalita is already installed.');
+      return;
+    }
     if (INSTALL) {
       const promptEvent = INSTALL;
-      INSTALL = null;
-      await promptEvent.prompt();
+      INSTALL = null; // Chrome only allows a saved prompt to be used once.
+      try {
+        await promptEvent.prompt(); // Directly opens the native Android install dialog.
+        const choice = await promptEvent.userChoice;
+        if (choice?.outcome === 'accepted') {
+          toast('Installing Papalita…');
+        } else {
+          toast('Installation cancelled. You can try again later.');
+        }
+      } catch (error) {
+        console.warn('[Papalita] Install prompt unavailable:', error);
+        toast('Install prompt unavailable. Try Chrome menu → Install app.');
+      }
       return;
     }
     const ios = /iphone|ipad|ipod/i.test(navigator.userAgent);
-    const message = ios
-      ? 'To install Papalita on iPhone: open this site in Safari, tap Share, then Add to Home Screen.'
-      : 'To install Papalita: open your browser menu (three dots), then choose Install app or Add to Home screen. If that option is missing, check the app manifest and icons, or whether Papalita is already installed.';
-    alert(message);
+    alert(ios
+      ? 'On iPhone: open Papalita in Safari, tap Share, then Add to Home Screen.'
+      : 'Chrome has not offered the direct install prompt yet. Open Chrome menu (⋮) → Install app. If already installed, open Papalita from your home screen.');
   }, noinstall: b => { b.closest('.mint')?.remove(); }
 };
 
@@ -1037,9 +1065,6 @@ document.addEventListener('submit', async e => { e.preventDefault(); const f = e
 
 /* ---------- boot ---------- */
 document.body.insertAdjacentHTML('afterbegin', '<div id="chrome"></div><div id="app"><main id="view" tabindex="-1"></main></div><div id="toasts" role="status" aria-live="polite"></div>');
-let INSTALL = null; let PAPALITA_INSTALLED = window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
-window.addEventListener('appinstalled', () => { PAPALITA_INSTALLED = true; INSTALL = null; if (S.user.in && curPath() === '/') render(); });
-window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); INSTALL = e; if (S.user.in && curPath() === '/') render(); });
 const recentHTML = () => (S.recent || []).length ? `<div class="sugg"><div class="row sp" style="padding:8px 10px"><b class="sm">Recent searches</b><button class="link gl" data-a="clrrecent" style="padding:4px">Clear</button></div>${S.recent.map(q => `<button data-a="sugg" data-t="q" data-id="${esc(q)}">${ic('clock', 18)}<span>${esc(q)}</span></button>`).join('')}</div>` : '';
 document.addEventListener('focusin', e => { if (e.target.id === 'q' && !e.target.value && $('#sg')) $('#sg').innerHTML = recentHTML(); });
 document.body.insertAdjacentHTML('beforeend', '<div id="offline" role="status" hidden>You are offline. Some features may not work.</div>');
