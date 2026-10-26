@@ -1,81 +1,61 @@
-
-const CACHE = 'papalita-static-20261026c';
-
-const APP_SHELL = [
-  './',
-  './index.html',
-  './styles.css',
-  './manifest.webmanifest',
-  './images/papalita-icon-192.png',
-  './images/papalita-icon-512.png'
-];
-
-self.addEventListener('install', (event) => {
-  event.waitUntil(
-    (async () => {
-      const cache = await caches.open(CACHE);
-
-      await Promise.allSettled(
-        APP_SHELL.map(async (url) => {
-          const response = await fetch(url, { cache: 'reload' });
-          if (response.ok) {
-            await cache.put(url, response);
-          }
-        })
-      );
-
-      await self.skipWaiting();
-    })()
-  );
+/* Papalita PWA — versioned network-first cache and push event support.
+   Push delivery requires a separately configured server and subscriptions. */
+const CACHE = 'papalita-static-20261026e';
+const APP_SHELL = ['./', './index.html', './manifest.webmanifest', './images/papalita-icon-192.png', './images/papalita-icon-512.png'];
+self.addEventListener('install', event => {
+  event.waitUntil((async () => {
+    const cache = await caches.open(CACHE);
+    await Promise.allSettled(APP_SHELL.map(async url => {
+      const res = await fetch(url, {cache:'reload'});
+      if (res.ok) await cache.put(url,res);
+    }));
+    await self.skipWaiting();
+  })());
 });
-
-self.addEventListener('activate', (event) => {
-  event.waitUntil(
-    (async () => {
-      const keys = await caches.keys();
-
-      await Promise.all(
-        keys
-          .filter(key =>
-            key.startsWith('papalita-') &&
-            key !== CACHE
-          )
-          .map(key => caches.delete(key))
-      );
-
-      await self.clients.claim();
-    })()
-  );
+self.addEventListener('activate', event => {
+  event.waitUntil((async () => {
+    const keys = await caches.keys();
+    await Promise.all(keys.filter(k => k.startsWith('papalita-') && k !== CACHE).map(k => caches.delete(k)));
+    await self.clients.claim();
+  })());
 });
-
-self.addEventListener('fetch', (event) => {
-  const request = event.request;
-
-  if (
-    request.method !== 'GET' ||
-    new URL(request.url).origin !== self.location.origin
-  ) return;
-
-  event.respondWith(
-    (async () => {
-      try {
-        const response = await fetch(request);
-
-        if (response.ok && !request.url.includes('/api/')) {
-          const cache = await caches.open(CACHE);
-          await cache.put(request, response.clone());
-        }
-
-        return response;
-      } catch (error) {
-        return (
-          await caches.match(request) ||
-          (request.mode === 'navigate'
-            ? await caches.match('./index.html')
-            : undefined) ||
-          Response.error()
-        );
+self.addEventListener('fetch', event => {
+  const req = event.request;
+  if (req.method !== 'GET' || new URL(req.url).origin !== self.location.origin) return;
+  event.respondWith((async () => {
+    try {
+      // Always revalidate online; avoid stale script bytes from HTTP cache.
+      const res = await fetch(req, {cache:'no-store'});
+      if (res.ok && !req.url.includes('/api/')) {
+        const cache = await caches.open(CACHE);
+        await cache.put(req,res.clone());
       }
-    })()
-  );
+      return res;
+    } catch(e) {
+      return await caches.match(req) || (req.mode === 'navigate' ? await caches.match('./index.html') : null) || Response.error();
+    }
+  })());
+});
+self.addEventListener('push', event => {
+  let data = {};
+  try { data = event.data ? event.data.json() : {}; } catch(e) { data = {body:event.data?.text() || ''}; }
+  const title = String(data.title || 'Papalita');
+  const options = {
+    body: String(data.body || 'You have an order update.'),
+    icon: './images/papalita-icon-192.png',
+    badge: './images/papalita-icon-192.png',
+    tag: String(data.tag || data.order_id || 'papalita-update'),
+    data: {url: typeof data.url === 'string' && data.url.startsWith('./') ? data.url : './#/orders'}
+  };
+  event.waitUntil(self.registration.showNotification(title, options));
+});
+self.addEventListener('notificationclick', event => {
+  event.notification.close();
+  event.waitUntil((async () => {
+    const target = new URL(event.notification.data?.url || './#/orders', self.registration.scope).href;
+    const clientsList = await clients.matchAll({type:'window',includeUncontrolled:true});
+    const existing = clientsList.find(c => c.url.startsWith(self.registration.scope));
+    if (existing) { await existing.navigate(target); return existing.focus(); }
+    return clients.openWindow(target);
+  })());
 });
