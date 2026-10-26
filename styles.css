@@ -1452,3 +1452,44 @@ main {
  #results>.restaurant-results-grid>.card.big>.hrt svg{width:14px!important;height:14px!important}
  #results>.restaurant-results-grid>.card.big>.ftag{position:static!important;order:3!important;align-self:flex-start!important;margin:0 8px 8px!important;padding:3px 6px!important;font-size:9px!important;max-width:calc(100% - 16px)!important}
 }
+
+/* Papalita Search Restaurants: compact cards; applies when #results contains .card.big */
+@media (max-width:699px) {
+  #results:has(.card.big) .grid2:has(> .card.big),
+  #results:has(.card.big) .grid:has(> .card.big),
+  #results.grid2:has(> .card.big),
+  #results.grid:has(> .card.big) {
+    display:grid!important;
+    grid-template-columns:repeat(2,minmax(0,1fr))!important;
+    gap:9px!important;
+    align-items:start!important;
+  }
+  #results .card.big {
+    display:flex!important;
+    flex-direction:column!important;
+    width:100%!important;
+    min-width:0!important;
+    height:auto!important;
+    min-height:0!important;
+    border-radius:13px!important;
+    overflow:hidden!important;
+  }
+  #results .card.big > .ph {
+    display:block!important;
+    flex:none!important;
+    width:100%!important;
+    height:85px!important;
+    min-height:85px!important;
+    max-height:85px!important;
+    aspect-ratio:auto!important;
+  }
+  #results .card.big > .ph img {width:100%!important;height:100%!important;object-fit:cover!important}
+  #results .card.big > .bd {padding:8px 9px 10px!important;gap:3px!important;min-width:0!important}
+  #results .card.big h3 {font-size:12px!important;line-height:1.25!important;display:-webkit-box!important;-webkit-line-clamp:2!important;-webkit-box-orient:vertical!important;overflow:hidden!important;overflow-wrap:anywhere!important;margin:0!important}
+  #results .card.big .meta2 {font-size:9px!important;gap:3px!important;line-height:1.3!important}
+  #results .card.big .meta2 svg {width:11px!important;height:11px!important}
+  #results .card.big .rpill {top:5px!important;right:5px!important;padding:3px 5px!important;font-size:9px!important}
+  #results .card.big .hrt {top:5px!important;left:5px!important}
+  #results .card.big .hrt .ib {width:27px!important;height:27px!important}
+  #results .card.big .ftag {font-size:8px!important;padding:4px 6px!important;max-width:calc(100% - 14px)!important}
+}
