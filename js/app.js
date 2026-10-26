@@ -3,20 +3,6 @@
 // Papalita startup fix - 2026-10-26
 (async () => {
 'use strict';
-// Capture Chrome's install event immediately, before the async Supabase catalogue loads.
-let INSTALL = null;
-let PAPALITA_INSTALLED = window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
-window.addEventListener('beforeinstallprompt', event => {
-  event.preventDefault();
-  INSTALL = event;
-  // Home UI is refreshed at boot; refresh here too when already loaded.
-  if (typeof S !== 'undefined' && S?.user?.in && typeof curPath === 'function' && curPath() === '/') render();
-});
-window.addEventListener('appinstalled', () => {
-  PAPALITA_INSTALLED = true;
-  INSTALL = null;
-  if (typeof S !== 'undefined' && S?.user?.in && typeof curPath === 'function' && curPath() === '/') render();
-});
 const C = window.FOODIE_CONFIG, RS = window.RESTAURANTS, CATS = window.CATEGORIES;
 // Load the online catalogue before rendering the customer menu.
 try {
@@ -196,7 +182,7 @@ document.addEventListener('error', e => { const t = e.target; if (t.tagName === 
 
 /* ---------- store ---------- */
 const KEY = 'foodie.alegria.v1';
-const R = id => RS.find(r => r.id === id);
+const R = id => RS.find(r => String(r.id) === String(id));
 const ITEM = id => { for (const r of RS) { const i = r.items.find(i => i.id === id); if (i) return { item: i, rest: r }; } return null; };
 const ALL = () => RS.flatMap(r => r.items.map(i => ({ item: i, rest: r })));
 const brg = () => window.BRGYS.find(b => b.n === (S.loc || {}).brgy) || window.BRGYS[0];
@@ -216,6 +202,10 @@ let S; try { S = JSON.parse(localStorage.getItem(KEY)); } catch (e) {} if (!S ||
 const save = () => { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) {} };
 const unread = () => S.notes.filter(n => !n.read && (n.uid || 'demo') === S.user.id).length;
 const cartCount = () => S.cart.lines.reduce((a, l) => a + l.qty, 0);
+// Backward-compatible migration: old carts had one rid for all lines.
+S.cart.lines.forEach(l => { if (!l.rid) l.rid = S.cart.rid || (ITEM(l.itemId) || {}).rest?.id; });
+const cartGroups = (cart = S.cart) => { const groups = new Map(); for (const line of cart.lines) { const rid = String(line.rid || cart.rid || ''); if (!groups.has(rid)) groups.set(rid, []); groups.get(rid).push(line); } return [...groups].map(([rid, lines]) => ({ rid, rest: R(rid), lines, sub: lines.reduce((sum, l) => sum + l.unit * l.qty, 0) })); };
+
 const notify = (type, t, b, who) => { S.notes.unshift({ id: uid('n'), type, t, b, at: Date.now(), read: false, uid: who || S.user.id }); save(); };
 
 /* ---------- domain ---------- */
@@ -228,25 +218,40 @@ const dist = r => Math.hypot(r.dx, r.dy) + brg().km;
 const defSel = item => { const s = {}; (item.opts||[]).forEach(g => { if (g.req && g.ch?.length) s[g.id] = [g.ch[0].n]; }); return s; };
 const unitPrice = (item, sel) => item.price + (item.opts||[]).reduce((a, g) => a + (sel[g.id] || []).reduce((b, n) => b + ((g.ch.find(c => c.n === n) || {}).p || 0), 0), 0);
 const selText = l => Object.values(l.sel || {}).flat().join(', ');
-const validPromo = (p, sub, rid) => { if (!p || p.active === false) return 'This code is no longer active.'; if (p.exp && new Date(p.exp + 'T23:59:59+08:00') < new Date()) return 'This code has expired.'; if (p.rid && p.rid !== rid) return `Only valid for ${R(p.rid).name} orders.`; if (sub < p.min) return `Add ${peso(p.min - sub)} more to use ${p.code}.`; return ''; };
+const validPromo = (p, sub, rid) => { if (!p || p.active === false) return 'This code is no longer active.'; if (p.exp && new Date(p.exp + 'T23:59:59+08:00') < new Date()) return 'This code has expired.'; if (p.rid && p.rid !== rid) return `Only valid for ${R(p.rid)?.name || "another store"} orders.`; if (sub < p.min) return `Add ${peso(p.min - sub)} more to use ${p.code}.`; return ''; };
 function calc(cart = S.cart, code = S.promo) {
-  const r = R(cart.rid), sub = cart.lines.reduce((a, l) => a + l.unit * l.qty, 0), fee = r && sub ? feeOf(r) : 0;
-  const p = code && window.PROMOS.find(x => x.code === code), perr = p ? validPromo(p, sub, cart.rid) : '';
-  let disc = 0; if (p && !perr) disc = p.type === 'flat' ? Math.min(p.value, sub) : p.type === 'percent' ? Math.min(Math.round(sub * p.value / 100), p.cap) : fee;
+  const groups = cartGroups(cart);
+  const sub = groups.reduce((n, g) => n + g.sub, 0);
+  const pickup = CK.fulfillment === 'pickup';
+  const fee = pickup ? 0 : groups.reduce((n, g) => n + (g.rest ? feeOf(g.rest) : 0), 0);
+  const p = code && window.PROMOS.find(x => x.code === code);
+  // Store-specific codes apply only to the matching store, never another store.
+  const eligible = p && p.rid ? groups.filter(g => String(g.rid) === String(p.rid)) : groups;
+  const eligibleSub = eligible.reduce((n, g) => n + g.sub, 0);
+  const eligibleFee = pickup ? 0 : eligible.reduce((n, g) => n + (g.rest ? feeOf(g.rest) : 0), 0);
+  const perr = p ? (!eligible.length ? 'This voucher is not valid for the stores in your cart.' : validPromo(p, eligibleSub, p.rid || eligible[0].rid)) : '';
+  let disc = 0;
+  if (p && !perr) disc = p.type === 'flat' ? Math.min(p.value, eligibleSub) : p.type === 'percent' ? Math.min(Math.round(eligibleSub * p.value / 100), p.cap ?? Infinity) : eligibleFee;
   const total = Math.max(0, sub + fee - disc);
-  return { r, sub, fee, disc, perr, promo: p, total, vat: total * 12 / 112, minOk: !r || sub >= r.min };
+  return { r: groups[0]?.rest, groups, sub, fee, disc, perr, promo: p, total, vat: total * 12 / 112,
+    minOk: groups.every(g => g.rest && g.sub >= (g.rest.min || 0)), pickup };
 }
+
 function addToCart(item, rest, sel, qty, note, replaceKey, fx) {
   if (!item.available) return toast('Sold out right now.');
   if (!isOpen(rest)) return toast(`${rest.name} is closed. Opens ${fmtT(rest.hours[0])}.`);
-  const go = () => { const unit = unitPrice(item, sel), k = JSON.stringify([item.id, sel, note]);
-    if (replaceKey) S.cart.lines = S.cart.lines.filter(l => l.key !== replaceKey);
-    const ex = S.cart.lines.find(l => JSON.stringify([l.itemId, l.sel, l.note]) === k);
-    if (ex) ex.qty += qty; else S.cart.lines.push({ key: uid('l'), itemId: item.id, name: item.name, img: item.img, qty, unit, sel, note });
-    S.cart.rid = rest.id; save(); try { navigator.vibrate && navigator.vibrate(15); } catch (e) {} if (fx) { holdCart = true; updateChrome(false); flyTo(fx); } else updateChrome(true); toast(replaceKey ? 'Cart updated.' : `${item.name} added to cart.`, 'View cart', () => nav('/cart')); };
-  if (S.cart.rid && S.cart.rid !== rest.id && S.cart.lines.length) confirmDlg(`Your cart has items from ${R(S.cart.rid).name}. Start a new cart with ${rest.name}?`, 'Start new cart').then(ok => { if (ok) { S.cart = { rid: null, lines: [] }; go(); } });
-  else go();
+  const unit = unitPrice(item, sel), k = JSON.stringify([rest.id, item.id, sel, note]);
+  if (replaceKey) S.cart.lines = S.cart.lines.filter(l => l.key !== replaceKey);
+  const ex = S.cart.lines.find(l => JSON.stringify([l.rid || S.cart.rid, l.itemId, l.sel, l.note]) === k);
+  if (ex) ex.qty += qty;
+  else S.cart.lines.push({ key: uid('l'), rid: rest.id, itemId: item.id, name: item.name, img: item.img, qty, unit, sel, note });
+  S.cart.rid = S.cart.lines[0]?.rid || null;
+  save();
+  try { navigator.vibrate && navigator.vibrate(15); } catch (e) {}
+  if (fx) { holdCart = true; updateChrome(false); flyTo(fx); } else updateChrome(true);
+  toast(replaceKey ? 'Cart updated.' : `${item.name} added to cart.`, 'View cart', () => nav('/cart'));
 }
+
 const T = [0, 15, 35, 50, 65, 95];       // demo timeline (seconds). Production: driven by backend status events
 const STEPS = [['Order received', 'The restaurant has your order.', 'check'], ['Preparing your food', 'The kitchen is cooking.', 'fork'], ['Rider assigned', 'Marco is on the way to the restaurant.', 'user'], ['Picking up your order', 'Rider is at the restaurant.', 'store'], ['On the way', 'Your food is heading to you.', 'bike'], ['Delivered', 'Enjoy your meal!', 'home']];
 const stageOf = o => { if (o.status === 'cancelled' || o.status === 'refunded') return -1; if (o.demo === false) return o.stage; const e = (Date.now() - o.createdAt) / 1000; let s = 0; T.forEach((t, i) => { if (e >= t) s = i; }); return s; };
@@ -449,7 +454,7 @@ function fillResults() {
     a.sort((x, y) => F.sort === 'rating' ? y.rating - x.rating : F.sort === 'price' ? Math.min(...x.items.map(i => i.price)) - Math.min(...y.items.map(i => i.price)) : F.sort === 'eta' ? etaOf(x)[0] - etaOf(y)[0] : parseFloat(y.reviews) - parseFloat(x.reviews));
     n = a.length; html = a.map(restCard).join('');
   }
-  $('#results').innerHTML = n ? `<p class="mu sm" style="margin:12px 0">${n} ${F.tab === 'dishes' ? 'dish' : 'restaurant'}${n > 1 ? (F.tab === 'dishes' ? 'es' : 's') : ''} found</p><div class="grid ${F.tab === 'rests' ? 'restaurant-results-grid' : ''}">${html}</div>` : emptyState('search', 'No matches', 'Try a different word or remove a filter.', 'Clear filters', 'fclear');
+  $('#results').innerHTML = n ? `<p class="mu sm" style="margin:12px 0">${n} ${F.tab === 'dishes' ? 'dish' : 'restaurant'}${n > 1 ? (F.tab === 'dishes' ? 'es' : 's') : ''} found</p><div class="grid">${html}</div>` : emptyState('search', 'No matches', 'Try a different word or remove a filter.', 'Clear filters', 'fclear');
 }
 
 /* ---------- restaurant ---------- */
@@ -481,7 +486,7 @@ function instructionPlaceholder(item, rest) {
 
 /* ---------- item sheet ---------- */
 function openItem(id, editKey) {
-  const found = ITEM(id); if (!found) { toast('This item is no longer available.'); return; } const { item, rest } = found, ed = editKey && S.cart.lines.find(l => l.key === editKey), st = { sel: ed ? JSON.parse(JSON.stringify(ed.sel)) : defSel(item), qty: ed ? ed.qty : 1, note: ed ? ed.note : '' };
+  const { item, rest } = ITEM(id), ed = editKey && S.cart.lines.find(l => l.key === editKey), st = { sel: ed ? JSON.parse(JSON.stringify(ed.sel)) : defSel(item), qty: ed ? ed.qty : 1, note: ed ? ed.note : '' };
   const el = openSheet(`<div style="margin-top:0">${photo(item.img, `${item.name} from ${rest.name}`, { ar: '16/10', w: 900, eager: 1 })}</div><div class="pd"><div class="row sp"><h2 style="font-size:24px">${esc(item.name)}</h2><b style="font-size:20px">${peso(item.price)}</b></div><p class="mu" style="margin:6px 0 10px">${esc(item.desc)}</p><div class="row g sm">${stars(item.r || rest.rating, item.rv || rest.reviews)}<span class="mu">· ${esc(rest.name)} · ${etaOf(rest)[0]}–${etaOf(rest)[1]} min</span></div></div>
   <form class="pd" style="padding-top:0" novalidate>${item.opts.map(g => `<fieldset style="border:0;padding:0;margin:14px 0 0"><legend style="font-weight:800;margin-bottom:8px">${esc(g.label)} ${g.req ? '<span class="status n">Required</span>' : '<span class="mu sm">Optional</span>'}</legend>${g.ch.map(c => `<label class="opt"><input type="${g.type === 'radio' ? 'radio' : 'checkbox'}" name="${esc(g.id)}" value="${esc(c.n)}" ${(st.sel[g.id] || []).includes(c.n) ? 'checked' : ''}><span class="grow">${esc(c.n)}</span><span class="mu">${c.p ? '+' + peso(c.p) : 'Free'}</span></label>`).join('')}</fieldset>`).join('')}
   <div class="field" style="margin-top:16px"><label for="note">Special instructions</label><textarea class="in" id="note" maxlength="200" placeholder="${esc(instructionPlaceholder(item, rest))}">${esc(st.note)}</textarea></div></form>
@@ -490,7 +495,7 @@ function openItem(id, editKey) {
     $('[data-tot]', el).textContent = `${ed ? 'Update' : 'Add to cart'} · ${peso(unitPrice(item, st.sel) * st.qty)}`; };
   el.addEventListener('input', upd); el.addEventListener('change', upd); upd();
   el.addEventListener('click', e => { const b = e.target.closest('[data-sa]'); if (!b) return; const a = b.dataset.sa;
-    if (a === 'inc') st.qty = Math.min(20, st.qty + 1); if (a === 'dec') st.qty = Math.max(1, st.qty - 1); upd();
+    if (a === 'inc') st.qty = Math.min(99, st.qty + 1); if (a === 'dec') st.qty = Math.max(1, st.qty - 1); upd();
     if (a === 'add') { upd(); const missing=(item.opts||[]).find(g=>g.req && !(st.sel[g.id]||[]).length);if(missing){toast('Please choose '+missing.label);return;} const fx = { rect: $('.ph', el).getBoundingClientRect(), img: item.img }; closeSheet(); addToCart(item, rest, st.sel, st.qty, st.note, ed ? ed.key : null, ed ? null : fx); if (ed) render(); } });
 }
 
@@ -504,32 +509,32 @@ V.cartView = () => { const c = calc();
   const a = S.addrs.find(x => x.id === CK.addr) || defAddr(); if (a) CK.addr = a.id; const r = c.r, arr = new Intl.DateTimeFormat('en-PH', { timeZone: 'Asia/Manila', hour: 'numeric', minute: '2-digit' }).format(new Date(Date.now() + etaOf(r)[1] * 6e4));
   const pl = payLabel(), tip = CK.tip || 0; const fee = c.promo && !c.perr && c.promo.type === 'ship' ? `<s class="mu">${peso(c.fee)}</s> <b class="gl">Free</b>` : peso(c.fee);
   return { html: `<section class="view" style="max-width:640px;margin:0 auto"><div class="rv-h"><button class="ib w" data-a="back" aria-label="Go back">${ic('back')}</button><h1>ORDER REVIEW</h1><span style="width:44px"></span></div>
-  <div class="rv-lab"><span>Delivery address</span><button data-a="addrpick">EDIT</button></div>
-  <div class="row" style="gap:14px"><span class="pbtn" style="width:56px;height:56px;background:#fff;color:var(--ink);box-shadow:var(--sh)">${ic('pin', 22)}</span><div class="grow">${a ? `<b style="font-size:20px">${esc(a.label)}</b> ${a.def ? '<span class="status n" style="letter-spacing:.06em">PRIMARY</span>' : ''}<p class="mu">${esc(a.line)} • ${esc(a.city)}${a.landmark ? '<br>Landmark: ' + esc(a.landmark) : ''}</p>` : `<b>No address yet</b><p class="mu">Add where we should deliver.</p>`}</div></div>
+  <div class="rv-lab"><span>Order type</span></div><div class="chips"><button class="chip ${CK.fulfillment === 'delivery' ? 'on' : ''}" data-a="fulfillment" data-v="delivery">Delivery</button><button class="chip ${CK.fulfillment === 'pickup' ? 'on' : ''}" data-a="fulfillment" data-v="pickup">Pickup at store</button></div><div class="rv-lab"><span>${CK.fulfillment === 'pickup' ? 'Pickup locations' : 'Delivery address'}</span>${CK.fulfillment === 'pickup' ? '' : '<button data-a="addrpick">EDIT</button>'}</div>
+  ${CK.fulfillment === 'pickup' ? `<div class="panel">${c.groups.map(g => `<p><b>${esc(g.rest?.name || 'Store')}</b><br>${esc(g.rest?.addr || 'Contact the store for pickup location')}</p>`).join('')}</div>` : `<div class="row" style="gap:14px"><span class="pbtn" style="width:56px;height:56px;background:#fff;color:var(--ink);box-shadow:var(--sh)">${ic('pin', 22)}</span><div class="grow">${a ? `<b style="font-size:20px">${esc(a.label)}</b> ${a.def ? '<span class="status n" style="letter-spacing:.06em">PRIMARY</span>' : ''}<p class="mu">${esc(a.line)} • ${esc(a.city)}${a.landmark ? '<br>Landmark: ' + esc(a.landmark) : ''}</p>` : `<b>No address yet</b><p class="mu">Add where we should deliver.</p>`}</div></div>`}
   <div class="field" style="margin-top:14px"><label for="cp">Contact number</label><input class="in" id="cp" inputmode="tel" value="${esc(S.user.phone || '')}" placeholder="09XXXXXXXXX" autocomplete="tel"><p class="err" id="cpe"></p></div>
   <div class="mint row" style="margin-top:6px">${ic('clock', 26)}<div><span class="lab">Estimated time</span><div style="font-size:18px"><b>${etaOf(r)[0]}–${etaOf(r)[1]} minutes</b> · Arriving by ${arr}</div></div></div>
-  <div class="rv-lab"><span>Your selection</span><button data-a="restmenu" data-id="${r.id}">ADD ITEMS</button></div>
-  ${S.cart.lines.map(l => `<div class="row" style="gap:16px;align-items:flex-start;padding:8px 0">${photo(l.img, l.name, { ar: '1', w: 240 }).replace('class="ph', 'style="width:100px;border-radius:18px;flex:none" class="ph')}<div class="grow"><div class="row sp" style="align-items:flex-start"><h3 style="font-size:19px">${esc(l.name)}</h3><b style="font-size:19px">${peso(l.unit * l.qty)}</b></div><p class="mu sm">${esc(selText(l)) || 'Standard'}${l.note ? ' · “' + esc(l.note) + '”' : ''}</p>
-  <div class="row sp" style="margin-top:10px"><div class="qty mintq"><button data-a="qty" data-k="${l.key}" data-d="-1" aria-label="Decrease ${esc(l.name)}">${ic('minus', 16)}</button><b>${l.qty}</b><button data-a="qty" data-k="${l.key}" data-d="1" aria-label="Increase ${esc(l.name)}">${ic('plus', 16)}</button></div><span><button class="rm" data-a="editline" data-k="${l.key}" data-id="${l.itemId}" style="color:var(--mu)">EDIT</button> <button class="rm" data-a="rmline" data-k="${l.key}" aria-label="Remove ${esc(l.name)}">REMOVE</button></span></div></div></div>`).join('')}
+  <div class="rv-lab"><span>Your selection · ${c.groups.length} store(s)</span><button data-a="browse">ADD ITEMS</button></div>
+  ${c.groups.map(g => `<h3 style="margin:16px 0 6px;color:var(--gc,#087F32)">${esc(g.rest?.name || 'Store')} · ${peso(g.sub)}</h3>${g.lines.map(l => `<div class="row" style="gap:16px;align-items:flex-start;padding:8px 0">${photo(l.img, l.name, { ar: '1', w: 240 }).replace('class="ph', 'style="width:100px;border-radius:18px;flex:none" class="ph')}<div class="grow"><div class="row sp" style="align-items:flex-start"><h3 style="font-size:19px">${esc(l.name)}</h3><b style="font-size:19px">${peso(l.unit * l.qty)}</b></div><p class="mu sm">${esc(selText(l)) || 'Standard'}${l.note ? ' · “' + esc(l.note) + '”' : ''}</p>
+  <div class="row sp" style="margin-top:10px"><div class="qty mintq"><button data-a="qty" data-k="${l.key}" data-d="-1" aria-label="Decrease ${esc(l.name)}">${ic('minus', 16)}</button><b>${l.qty}</b><button data-a="qty" data-k="${l.key}" data-d="1" aria-label="Increase ${esc(l.name)}">${ic('plus', 16)}</button></div><span><button class="rm" data-a="editline" data-k="${l.key}" data-id="${l.itemId}" style="color:var(--mu)">EDIT</button> <button class="rm" data-a="rmline" data-k="${l.key}" aria-label="Remove ${esc(l.name)}">REMOVE</button></span></div></div></div>`).join('')}`).join('')}
   <div class="rv-lab"><span>Payment method</span><button data-a="paypick">CHANGE</button></div>
   <div class="mint row" style="gap:14px"><span class="paybadge">${ic('card', 22)}</span><div class="grow"><b style="font-size:18px">${esc(pl[0])}</b><div class="lab" style="font-size:12px">${esc(pl[1])}</div></div><span class="tick">${ic('check', 16)}</span></div>
-  <div class="field" style="margin-top:14px"><label for="di">Delivery instructions (optional)</label><textarea class="in" id="di" maxlength="200" placeholder="Gate color, landmarks, leave at lobby…"></textarea></div>
-  <div class="rv-lab" style="margin-top:24px"><span>Tip your rider</span><span class="sm mu" style="letter-spacing:0;text-transform:none;font-weight:600">100% goes to the rider</span></div><div class="chips">${[0, 20, 30, 50, 100].map(v => `<button class="chip ${tip === v ? 'on' : ''}" data-a="tip" data-v="${v}" aria-pressed="${tip === v}">${v ? peso(v) : 'No tip'}</button>`).join('')}</div>
+  <div class="field" style="margin-top:14px"><label for="di">Instructions (optional)</label><textarea class="in" id="di" maxlength="200" placeholder="Gate color, landmarks, leave at lobby…"></textarea></div>
+  ${CK.fulfillment === 'pickup' ? '' : `<div class="rv-lab" style="margin-top:24px"><span>Tip your rider</span><span class="sm mu" style="letter-spacing:0;text-transform:none;font-weight:600">100% goes to the rider</span></div><div class="chips">${[0, 20, 30, 50, 100].map(v => `<button class="chip ${tip === v ? 'on' : ''}" data-a="tip" data-v="${v}" aria-pressed="${tip === v}">${v ? peso(v) : 'No tip'}</button>`).join('')}</div>`}
   <div style="margin-top:14px">${promoBox(c)}</div>
-  <div class="sum" style="margin-top:18px;font-size:18px"><div class="r mu"><span>Order Subtotal</span><b style="color:var(--ink)">${peso(c.sub)}</b></div><div class="r mu"><span>Delivery Fee</span><b style="color:var(--ink)">${fee}</b></div>${c.disc && c.promo.type !== 'ship' ? `<div class="r gl"><span>Promo ${esc(c.promo.code)}</span><b>−${peso(c.disc)}</b></div>` : ''}${tip ? `<div class="r mu"><span>Rider tip</span><b style="color:var(--ink)">${peso(tip)}</b></div>` : ''}<p class="sm mu">Includes ${peso(c.vat)} VAT (12%).</p></div>
-  ${!c.minOk ? `<p class="err" style="margin:10px 0">Minimum order is ${peso(r.min)}. Add ${peso(r.min - c.sub)} more.</p>` : ''}
+  <div class="sum" style="margin-top:18px;font-size:18px"><div class="r mu"><span>Order Subtotal</span><b style="color:var(--ink)">${peso(c.sub)}</b></div><div class="r mu"><span>${CK.fulfillment === 'pickup' ? 'Pickup Fee' : 'Delivery Fee'}</span><b style="color:var(--ink)">${fee}</b></div>${c.disc && c.promo.type !== 'ship' ? `<div class="r gl"><span>Promo ${esc(c.promo.code)}</span><b>−${peso(c.disc)}</b></div>` : ''}${tip ? `<div class="r mu"><span>Rider tip</span><b style="color:var(--ink)">${peso(tip)}</b></div>` : ''}<p class="sm mu">Includes ${peso(c.vat)} VAT (12%).</p></div>
+  ${!c.minOk ? `<p class="err" style="margin:10px 0">Some stores have not reached their minimum order amount.</p>` : ''}
   <button class="pbar" id="place" data-a="place" ${c.minOk ? '' : 'disabled'}><span>Place Order</span><i></i><b>${peso(c.total + tip)}</b></button>
-  <p class="mu sm" style="text-align:center;margin-top:12px;letter-spacing:.04em">TAPPING PLACE ORDER CONFIRMS YOUR ACCEPTANCE OF TERMS</p><p style="text-align:center;margin-top:8px"><span class="demo">DEMO PAYMENTS</span> <span class="sm mu">No real money moves until a provider is connected.</span></p></section>` }; };
+  <p class="mu sm" style="text-align:center;margin-top:12px;letter-spacing:.04em">TAPPING PLACE ORDER CONFIRMS YOUR ACCEPTANCE OF TERMS</p><p style="text-align:center;margin-top:8px"><span class="sm mu">Orders are saved on this device only until Supabase order sync is connected. Cash payment only.</span></p></section>` }; };
 
 /* ---------- checkout ---------- */
-let CK = { addr: null, pay: 'gcash', det: {} };
+let CK = { addr: null, pay: 'cod', det: {}, fulfillment: 'delivery', tip: 0 };
 const luhn = n => { let s = 0, d = false; for (let i = n.length - 1; i >= 0; i--) { let x = +n[i]; if (d) { x *= 2; if (x > 9) x -= 9; } s += x; d = !d; } return s % 10 === 0; };
 const PH = /^(09|\+639)\d{9}$/;
-const payLabel = () => { const p = CK.pay, d = CK.det || {}; if (p === 'card') return ['Credit / debit card', d.last4 ? 'DEBIT CARD •••• ' + d.last4 : 'ADD CARD DETAILS']; if (p === 'cod') return ['Cash on Delivery', 'PAY THE RIDER ON ARRIVAL']; const n = (d.wallet || S.user.phone || '').replace(/\s/g, ''); return [PAYNAME[p], n ? 'MOBILE •••• ' + n.slice(-4) : 'ADD MOBILE NUMBER']; };
+const payLabel = () => { const p = CK.pay, d = CK.det || {}; if (p === 'card') return ['Credit / debit card', d.last4 ? 'DEBIT CARD •••• ' + d.last4 : 'ADD CARD DETAILS']; if (p === 'cod') return [CK.fulfillment === 'pickup' ? 'Cash on Pickup' : 'Cash on Delivery', CK.fulfillment === 'pickup' ? 'PAY AT THE STORE' : 'PAY THE RIDER ON ARRIVAL']; const n = (d.wallet || S.user.phone || '').replace(/\s/g, ''); return [PAYNAME[p], n ? 'MOBILE •••• ' + n.slice(-4) : 'ADD MOBILE NUMBER']; };
 function addrPick() { const el = openSheet(`<div class="pd" style="padding-top:34px"><h2 style="margin-bottom:12px">Deliver to</h2>${S.addrs.map(a => `<label class="opt"><input type="radio" name="ap" value="${a.id}" ${(CK.addr || (defAddr() || {}).id) === a.id ? 'checked' : ''}><span class="grow"><b>${esc(a.label)}</b><br><span class="mu sm">${esc(a.line)}, ${esc(a.city)}</span></span></label>`).join('')}<button class="btn s blk" data-a="addrform" style="margin-top:6px">${ic('plus', 18)}Add new address</button><button class="btn o blk" data-a="loc" style="margin-top:8px">${ic('pin', 18)}Change barangay</button></div>`, { label: 'Delivery address' });
   el.addEventListener('change', e => { if (e.target.name === 'ap') { CK.addr = e.target.value; S.addrs.forEach(a => a.def = a.id === CK.addr); syncLoc(S.addrs.find(a => a.id === CK.addr)); save(); closeSheet(); updateChrome(); render(); } }); }
-function payPick() { const el = openSheet(`<form class="pd" style="padding-top:34px" novalidate><h2 style="margin-bottom:6px">Payment method</h2><p class="note" style="margin-bottom:12px"><span class="demo">DEMO</span> No real payment is taken. Card details are validated but never stored.</p>${Object.entries(PAYNAME).map(([k, l]) => `<label class="opt"><input type="radio" name="pmeth" value="${k}" ${CK.pay === k ? 'checked' : ''}><span class="grow">${l}</span></label>`).join('')}<div id="pmx" style="margin-top:8px"></div><button class="btn p blk">Use this method</button></form>`, { label: 'Payment method' });
-  const cur = () => $('input[name=pmeth]:checked', el).value, fields = () => { const p = cur(); $('#pmx', el).innerHTML = p === 'card' ? `<div class="field"><label for="kn">Card number</label><input class="in" id="kn" inputmode="numeric" autocomplete="cc-number" placeholder="4242 4242 4242 4242" maxlength="23"><p class="err" data-e="kn"></p></div><div class="two"><div class="field"><label for="kx">Expiry (MM/YY)</label><input class="in" id="kx" inputmode="numeric" placeholder="MM/YY" maxlength="5"><p class="err" data-e="kx"></p></div><div class="field"><label for="kc">CVV</label><input class="in" id="kc" inputmode="numeric" maxlength="4"><p class="err" data-e="kc"></p></div></div>` : p === 'cod' ? '<p class="sm mu">Pay the rider in cash when your food arrives.</p>' : `<div class="field"><label for="wn">${PAYNAME[p]} mobile number</label><input class="in" id="wn" inputmode="tel" value="${esc((CK.det || {}).wallet || S.user.phone || '')}" placeholder="09XXXXXXXXX"><p class="err" data-e="wn"></p></div>`; };
+function payPick() { const el = openSheet(`<form class="pd" style="padding-top:34px" novalidate><h2 style="margin-bottom:6px">Payment method</h2><p class="note" style="margin-bottom:12px">Online payment is not connected yet. Choose cash payment.</p>${Object.entries(PAYNAME).filter(([k]) => k === 'cod').map(([k, l]) => `<label class="opt"><input type="radio" name="pmeth" value="${k}" ${CK.pay === k ? 'checked' : ''}><span class="grow">${l}</span></label>`).join('')}<div id="pmx" style="margin-top:8px"></div><button class="btn p blk">Use this method</button></form>`, { label: 'Payment method' });
+  const cur = () => $('input[name=pmeth]:checked', el).value, fields = () => { const p = cur(); $('#pmx', el).innerHTML = p === 'card' ? `<div class="field"><label for="kn">Card number</label><input class="in" id="kn" inputmode="numeric" autocomplete="cc-number" placeholder="4242 4242 4242 4242" maxlength="23"><p class="err" data-e="kn"></p></div><div class="two"><div class="field"><label for="kx">Expiry (MM/YY)</label><input class="in" id="kx" inputmode="numeric" placeholder="MM/YY" maxlength="5"><p class="err" data-e="kx"></p></div><div class="field"><label for="kc">CVV</label><input class="in" id="kc" inputmode="numeric" maxlength="4"><p class="err" data-e="kc"></p></div></div>` : p === 'cod' ? '<p class="sm mu">Pay cash on delivery or at pickup.</p>' : `<div class="field"><label for="wn">${PAYNAME[p]} mobile number</label><input class="in" id="wn" inputmode="tel" value="${esc((CK.det || {}).wallet || S.user.phone || '')}" placeholder="09XXXXXXXXX"><p class="err" data-e="wn"></p></div>`; };
   el.addEventListener('change', e => { if (e.target.name === 'pmeth') fields(); }); fields();
   $('form', el).onsubmit = e => { e.preventDefault(); const p = cur(), v = id => ($('#' + id, el) || {}).value?.trim() || '', er = {}, det = {};
     if (p === 'card') { const n = v('kn').replace(/\s/g, ''), x = v('kx').match(/^(\d\d)\/(\d\d)$/); if (!/^\d{13,19}$/.test(n) || !luhn(n)) er.kn = 'Enter a valid card number.'; if (!x || +x[1] < 1 || +x[1] > 12 || new Date(2000 + +x[2], +x[1], 0, 23, 59) < new Date()) er.kx = 'Enter a valid, unexpired date.'; if (!/^\d{3,4}$/.test(v('kc'))) er.kc = 'Enter the 3 or 4 digit code.'; det.last4 = n.slice(-4); }
@@ -537,20 +542,39 @@ function payPick() { const el = openSheet(`<form class="pd" style="padding-top:3
     $$('[data-e]', el).forEach(x => x.textContent = ''); const k = Object.keys(er); if (k.length) { k.forEach(x => $(`[data-e=${x}]`, el).textContent = er[x]); return $('#' + k[0], el).focus(); }
     CK.pay = p; CK.det = det; closeSheet(); render(); }; }
 async function placeOrder() {
-  const c = calc(), a = S.addrs.find(x => x.id === CK.addr) || defAddr(); if (!S.cart.lines.length) return;
-  const phone = ($('#cp').value || '').trim().replace(/\s/g, ''); $('#cpe').textContent = ''; $('#cp').classList.remove('bad');
-  if (!a) { toast('Add a delivery address first.'); return addrForm(); }
+  const c = calc(), a = S.addrs.find(x => x.id === CK.addr) || defAddr();
+  if (!S.cart.lines.length) return;
+  const phone = ($('#cp').value || '').trim().replace(/\s/g, '');
+  $('#cpe').textContent = ''; $('#cp').classList.remove('bad');
+  if (CK.fulfillment !== 'pickup' && !a) { toast('Add a delivery address first.'); return addrForm(); }
   if (!PH.test(phone)) { $('#cp').classList.add('bad'); $('#cpe').textContent = 'Use a PH mobile number like 09171234567.'; return $('#cp').focus(); }
-  if (CK.pay === 'card' && !(CK.det || {}).last4) { toast('Add your card details.'); return payPick(); }
-  if ((CK.pay === 'gcash' || CK.pay === 'maya') && !PH.test(((CK.det || {}).wallet || S.user.phone || '').replace(/\s/g, ''))) { toast(`Add your ${PAYNAME[CK.pay]} number.`); return payPick(); }
-  if (!c.minOk) return toast(`Minimum order is ${peso(c.r.min)}.`);
-  const btn = $('#place'); btn.disabled = true; btn.firstElementChild.textContent = 'Processing demo payment…';
-  const order = { id: 'FD-' + Math.floor(100000 + Math.random() * 900000), rid: S.cart.rid, items: S.cart.lines.map(l => ({ ...l })), sub: c.sub, fee: c.fee, disc: c.disc, total: c.total + (CK.tip || 0), tip: CK.tip || 0, promo: S.promo, createdAt: Date.now(), demo: !isLive(), status: 'active', stage: 0, upd: Date.now(), uid: S.user.id,
-    addr: `${a.label} — ${a.line}${a.landmark ? ' (' + a.landmark + ')' : ''}, ${a.city}`, note: ($('#di').value || '').trim(), contact: { name: S.user.name, phone } };
-  try { order.pay = { method: CK.pay, ...(await Gateway.pay(order, CK.pay)) }; } catch (e) { btn.disabled = false; btn.firstElementChild.textContent = 'Place Order'; return toast(e.message); }
-  S.user.phone = phone; CK.tip = 0; S.orders.unshift(order); S.cart = { rid: null, lines: [] }; S.promo = null;
-  notify('order', `Order placed · ${order.id}`, `${R(order.rid).name} received your order.`); save(); updateChrome(); nav('/confirmation/' + order.id);
+  if (!c.minOk) return toast('One or more stores have not reached their minimum order.');
+  // No fake GCash/Maya/card authorization. COD for delivery; cash on pickup.
+  if (CK.pay !== 'cod') return toast('Online payments are not connected yet. Please select Cash on Delivery.');
+  const btn = $('#place'); btn.disabled = true; btn.firstElementChild.textContent = 'Placing orders…';
+  const createdAt = Date.now(), orders = c.groups.map((g, index) => {
+    const storeFee = CK.fulfillment === 'pickup' ? 0 : feeOf(g.rest);
+    // Allocate discount across stores proportionally; never exceed eligible amount.
+    const eligible = !c.promo?.rid || String(c.promo.rid) === String(g.rid);
+    const discountBase = c.promo?.rid ? c.groups.filter(x => String(x.rid) === String(c.promo.rid)).reduce((n,x)=>n+x.sub,0) : c.sub;
+    const discount = eligible && !c.perr && discountBase ? Math.min(g.sub + storeFee, Math.round(c.disc * g.sub / discountBase)) : 0;
+    const tip = CK.fulfillment === 'pickup' ? 0 : (index === 0 ? (CK.tip || 0) : 0);
+    return { id: 'FD-' + Math.floor(100000 + Math.random() * 900000) + '-' + index,
+      rid: g.rid, items: g.lines.map(l => ({...l})), sub: g.sub, fee: storeFee, disc: discount,
+      total: Math.max(0, g.sub + storeFee - discount + tip), tip,
+      promo: discount ? S.promo : null, createdAt, demo: false, status: 'active', stage: 0, upd: createdAt, uid: S.user.id,
+      fulfillment: CK.fulfillment, addr: CK.fulfillment === 'pickup' ? g.rest.addr : `${a.label} — ${a.line}${a.landmark ? ' (' + a.landmark + ')' : ''}, ${a.city}`,
+      note: ($('#di').value || '').trim(), contact: { name: S.user.name, phone },
+      pay: { method: 'cod', status: 'pending', demo: false } };
+  });
+  // Existing application uses localStorage, NOT Supabase. These are device-local orders.
+  S.user.phone = phone; CK.tip = 0; S.orders.unshift(...orders);
+  S.cart = { rid: null, lines: [] }; S.promo = null;
+  orders.forEach(o => notify('order', `Order placed · ${o.id}`, `${R(o.rid)?.name || 'Store'} order recorded on this device.`));
+  save(); updateChrome(); nav('/confirmation/' + orders[0].id);
+  if (orders.length > 1) toast(`${orders.length} separate store orders created on this device.`);
 }
+
 const ORD = id => S.orders.find(o => o.id === id);
 const orderLines = o => o.items.map(l => `<div class="row sp sm" style="padding:5px 0"><span>${l.qty} × ${esc(l.name)}${selText(l) ? `<br><span class="mu">${esc(selText(l))}</span>` : ''}</span><span>${peso(l.unit * l.qty)}</span></div>`).join('');
 const payTag = o => `${PAYNAME[o.pay.method]} ${o.pay.demo ? '<span class="demo">DEMO</span>' : ''}`;
@@ -609,7 +633,7 @@ V.track = id => { let o = ORD(id); if (!o) return V.notFound(); const r = R(o.ri
 /* ---------- orders ---------- */
 let OT = 'current';
 function reorder(o) { const lines = []; o.items.forEach(l => { const x = ITEM(l.itemId); if (x && x.item.available) lines.push({ ...l, key: uid('l'), unit: unitPrice(x.item, l.sel) }); }); if (!lines.length) return toast('Those items are no longer available.'); if (!isOpen(R(o.rid))) return toast(`${R(o.rid).name} is closed right now.`);
-  const go = () => { S.cart = { rid: o.rid, lines }; save(); updateChrome(true); nav('/cart'); }; S.cart.lines.length && S.cart.rid !== o.rid ? confirmDlg('Replace your current cart with this order?', 'Replace cart').then(ok => ok && go()) : go(); }
+  const go = () => { S.cart = { rid: o.rid, lines: lines.map(l => ({...l, rid: o.rid})) }; save(); updateChrome(true); nav('/cart'); }; S.cart.lines.length && S.cart.rid !== o.rid ? confirmDlg('Replace your current cart with this order?', 'Replace cart').then(ok => ok && go()) : go(); }
 V.ordersView = (_, p) => { if (p && p.get('t')) OT = p.get('t'); const cur = myOrders().filter(isCurrent), hist = myOrders().filter(o => !isCurrent(o)), list = OT === 'current' ? cur : hist;
   const card = o => { const s = stageOf(o), r = R(o.rid), st = s < 0 ? (o.status === 'refunded' ? 'Refunded' : 'Cancelled') : s === 5 ? 'Delivered' : STEPS[s][0];
     return `<div class="panel" tabindex="0" role="link" style="cursor:pointer" data-a="odetail" data-id="${o.id}"><div class="row">${`<div style="width:64px">${photo(o.items[0].img, o.items[0].name, { ar: '1', w: 200 }).replace('class="ph', 'style="border-radius:14px" class="ph')}</div>`}<div class="grow"><div class="row sp"><h3>${esc(r.name)}</h3><span class="status ${s < 0 ? 'closed' : s === 5 ? 'open' : 'n'}">${st}</span></div><p class="mu sm">${o.id} · ${new Date(o.createdAt).toLocaleDateString('en-PH', { month: 'short', day: 'numeric' })} · ${o.items.reduce((a, l) => a + l.qty, 0)} items</p><b>${peso(o.total)}</b></div></div>
@@ -896,7 +920,7 @@ const A = {
   share: b => { const r = R(b.dataset.id), u = location.href; if (navigator.share) navigator.share({ title: r.name + ' on Papalita', url: u }).catch(() => {}); else { try { navigator.clipboard.writeText(u); toast('Link copied.'); } catch (e) { toast('Sharing is not available here.'); } } },
   close: closeSheet, reload: () => render(), home: () => go('/'), browse, back: () => history.length > 1 ? history.back() : go('/'), go: (b) => { closeSheet(); go(b.dataset.id); },
   fav: b => toggleFav(b.dataset.k, b.dataset.id), item: b => openItem(b.dataset.id), rest: b => go('/restaurant/' + b.dataset.id), restmenu: b => go('/restaurant/' + b.dataset.id),
-  quick: b => { const x = ITEM(b.dataset.id); if (!x) { toast('This item is no longer available.'); return; } if ((x.item.opts||[]).length) { openItem(x.item.id); return; } const host = b.closest('.card,.mi'), src = (host && $('.ph', host)) || b; addToCart(x.item, x.rest, defSel(x.item), 1, '', null, { rect: src.getBoundingClientRect(), img: x.item.img }); tickBtn(b); },
+  quick: b => { const x = ITEM(b.dataset.id); if ((x.item.opts||[]).length) { openItem(x.item.id); return; } const host = b.closest('.card,.mi'), src = (host && $('.ph', host)) || b; addToCart(x.item, x.rest, defSel(x.item), 1, '', null, { rect: src.getBoundingClientRect(), img: x.item.img }); tickBtn(b); },
   loc: locSheet, askloc: () => { closeSheet(); askLocation(); },
   qa: b => { const id = b.dataset.id; if (id === 'rests') go('/discover?tab=rests&reset=1' + (HC !== 'all' ? '&cat=' + HC : '')); else if (id === 'order') go('/discover?tab=dishes&reset=1'); else if (id === 'track') { const o = myOrders().find(isCurrent); o ? go('/track/' + o.id) : (toast('No active orders to track.'), go('/orders')); } else if (id === 'promo') go('/promos'); else moreSheet(); },
   filters: () => go('/discover?f=1&tab=dishes'), catall: () => go('/categories'), cat: b => b.dataset.id === 'catering' ? go('/catering') : go('/discover?tab=dishes&reset=1&cat=' + b.dataset.id),
@@ -910,11 +934,12 @@ const A = {
   usepromo: b => setPromo(b.dataset.id), rmpromo: () => { S.promo = null; save(); render(); },
   applypromo: () => { const v = $('#pc').value.trim().toUpperCase(); if (!v) return ($('#pcerr').textContent = 'Enter a promo code.'); if (!window.PROMOS.find(p => p.code === v && p.active !== false)) return ($('#pcerr').textContent = 'That code is not valid.'); setPromo(v); },
   copy: b => { try { navigator.clipboard.writeText(b.dataset.id); toast(`Copied ${b.dataset.id}.`); } catch (e) { toast('Copy is not available here.'); } },
-  qty: b => { const l = S.cart.lines.find(x => x.key === b.dataset.k); l.qty += +b.dataset.d; if (l.qty < 1) return A.rmline(b); if (l.qty > 20) l.qty = 20; save(); updateChrome(); render(); },
+  qty: b => { const l = S.cart.lines.find(x => x.key === b.dataset.k); l.qty += +b.dataset.d; if (l.qty < 1) return A.rmline(b); if (l.qty > 99) l.qty = 99; save(); updateChrome(); render(); },
   editline: b => openItem(b.dataset.id, b.dataset.k),
-  rmline: b => { const i = S.cart.lines.findIndex(x => x.key === b.dataset.k), l = S.cart.lines[i], rid = S.cart.rid; S.cart.lines.splice(i, 1); if (!S.cart.lines.length) S.cart.rid = null; save(); updateChrome(); render(); toast(`${l.name} removed.`, 'Undo', () => { S.cart.lines.splice(i, 0, l); S.cart.rid = rid; save(); updateChrome(); render(); }); },
+  rmline: b => { const i = S.cart.lines.findIndex(x => x.key === b.dataset.k), l = S.cart.lines[i], rid = S.cart.rid; S.cart.lines.splice(i, 1); S.cart.rid = S.cart.lines[0]?.rid || null; save(); updateChrome(); render(); toast(`${l.name} removed.`, 'Undo', () => { S.cart.lines.splice(i, 0, l); S.cart.rid = rid; save(); updateChrome(); render(); }); },
   clearcart: () => confirmDlg('Remove everything from your cart?', 'Clear cart', true).then(ok => { if (ok) { S.cart = { rid: null, lines: [] }; save(); updateChrome(); render(); } }),
-  tocheckout: () => { const c = calc(); if (!S.cart.lines.length) return toast('Your cart is empty.'); if (!c.minOk) return toast(`Minimum order is ${peso(c.r.min)}.`); go('/checkout'); },
+  fulfillment: b => { CK.fulfillment = b.dataset.v; if (CK.fulfillment === 'pickup') CK.tip = 0; render(); },
+  tocheckout: () => { const c = calc(); if (!S.cart.lines.length) return toast('Your cart is empty.'); if (!c.minOk) return toast('Some stores have not reached their minimum order.'); go('/checkout'); },
   gotrack: b => go('/track/' + b.dataset.id), odetail: b => go('/order/' + b.dataset.id), otab: b => { OT = b.dataset.v; render(); }, reorder: b => reorder(ORD(b.dataset.id)),
   
 hideagain: b => {
@@ -940,31 +965,17 @@ hideagain: b => {
   logout: () => confirmDlg('Log out of Papalita?', 'Log out').then(async ok => { if (ok) { await authDB().auth.signOut(); S.user.in = false; clearSession(); save(); AU.view = 'login'; render(); } }),
   clrrecent: () => { S.recent = []; save(); const g = $('#sg'); g && (g.innerHTML = ''); },
   install: async () => {
-    if (PAPALITA_INSTALLED || window.matchMedia('(display-mode: standalone)').matches) {
-      toast('Papalita is already installed.');
-      return;
-    }
     if (INSTALL) {
       const promptEvent = INSTALL;
-      INSTALL = null; // Chrome only allows a saved prompt to be used once.
-      try {
-        await promptEvent.prompt(); // Directly opens the native Android install dialog.
-        const choice = await promptEvent.userChoice;
-        if (choice?.outcome === 'accepted') {
-          toast('Installing Papalita…');
-        } else {
-          toast('Installation cancelled. You can try again later.');
-        }
-      } catch (error) {
-        console.warn('[Papalita] Install prompt unavailable:', error);
-        toast('Install prompt unavailable. Try Chrome menu → Install app.');
-      }
+      INSTALL = null;
+      await promptEvent.prompt();
       return;
     }
     const ios = /iphone|ipad|ipod/i.test(navigator.userAgent);
-    alert(ios
-      ? 'On iPhone: open Papalita in Safari, tap Share, then Add to Home Screen.'
-      : 'Chrome has not offered the direct install prompt yet. Open Chrome menu (⋮) → Install app. If already installed, open Papalita from your home screen.');
+    const message = ios
+      ? 'To install Papalita on iPhone: open this site in Safari, tap Share, then Add to Home Screen.'
+      : 'To install Papalita: open your browser menu (three dots), then choose Install app or Add to Home screen. If that option is missing, check the app manifest and icons, or whether Papalita is already installed.';
+    alert(message);
   }, noinstall: b => { b.closest('.mint')?.remove(); }
 };
 
@@ -1065,6 +1076,9 @@ document.addEventListener('submit', async e => { e.preventDefault(); const f = e
 
 /* ---------- boot ---------- */
 document.body.insertAdjacentHTML('afterbegin', '<div id="chrome"></div><div id="app"><main id="view" tabindex="-1"></main></div><div id="toasts" role="status" aria-live="polite"></div>');
+let INSTALL = null; let PAPALITA_INSTALLED = window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+window.addEventListener('appinstalled', () => { PAPALITA_INSTALLED = true; INSTALL = null; if (S.user.in && curPath() === '/') render(); });
+window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); INSTALL = e; if (S.user.in && curPath() === '/') render(); });
 const recentHTML = () => (S.recent || []).length ? `<div class="sugg"><div class="row sp" style="padding:8px 10px"><b class="sm">Recent searches</b><button class="link gl" data-a="clrrecent" style="padding:4px">Clear</button></div>${S.recent.map(q => `<button data-a="sugg" data-t="q" data-id="${esc(q)}">${ic('clock', 18)}<span>${esc(q)}</span></button>`).join('')}</div>` : '';
 document.addEventListener('focusin', e => { if (e.target.id === 'q' && !e.target.value && $('#sg')) $('#sg').innerHTML = recentHTML(); });
 document.body.insertAdjacentHTML('beforeend', '<div id="offline" role="status" hidden>You are offline. Some features may not work.</div>');
