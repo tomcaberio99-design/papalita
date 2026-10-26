@@ -1,26 +1,6 @@
-
 {
-  "name": "Papalita - Food Delivery",
-  "short_name": "Papalita",
-  "description": "Good food closer to you. Local food delivery in Alegria, Surigao del Norte.",
-  "start_url": "./index.html",
-  "scope": "./",
-  "display": "standalone",
-  "background_color": "#ffffff",
-  "theme_color": "#087F32",
-  "orientation": "portrait",
-  "icons": [
-    {
-      "src": "images/papalita-icon-192.png",
-      "sizes": "192x192",
-      "type": "image/png",
-      "purpose": "any"
-    },
-    {
-      "src": "images/papalita-icon-512.png",
-      "sizes": "512x512",
-      "type": "image/png",
-      "purpose": "any"
-    }
-  ]
+ "id":"./", "name":"Papalita — Good Food Closer to You", "short_name":"Papalita",
+ "start_url":"./index.html", "scope":"./", "display":"standalone",
+ "background_color":"#ffffff", "theme_color":"#087F32",
+ "icons":[{"src":"images/papalita-icon-192.png","sizes":"192x192","type":"image/png","purpose":"any maskable"},{"src":"images/papalita-icon-512.png","sizes":"512x512","type":"image/png","purpose":"any maskable"}]
 }
