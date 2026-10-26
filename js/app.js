@@ -1,5 +1,6 @@
 /* Foodie web app (PWA). Vanilla ES modules-free build so it runs from any static host.
    Layers: utils -> store -> domain (cart/pricing/orders) -> services (gateway/api) -> UI screens -> router. */
+// Papalita startup fix - 2026-10-26
 (async () => {
 'use strict';
 const C = window.FOODIE_CONFIG, RS = window.RESTAURANTS, CATS = window.CATEGORIES;
