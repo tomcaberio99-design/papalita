@@ -9,7 +9,37 @@
 <meta name="description" content="Food delivery and catering in Alegria, Surigao del Norte.">
 <meta name="theme-color" content="#087F45">
 
-<link rel="manifest" href="manifest.webmanifest?v=papalita-20261026e">
+<script id="papalita-install-early">
+/* Capture Chrome's install offer before slow catalogue/auth scripts load. */
+(function () {
+  var pendingInstall = null;
+  window.addEventListener('beforeinstallprompt', function (event) {
+    event.preventDefault();
+    pendingInstall = event;
+    window.PAPALITA_EARLY_INSTALL_EVENT = event;
+  });
+  window.addEventListener('appinstalled', function () {
+    pendingInstall = null;
+    window.PAPALITA_EARLY_INSTALL_EVENT = null;
+  });
+  document.addEventListener('click', function (event) {
+    var button = event.target.closest && event.target.closest('[data-a="install"]');
+    if (!button || !pendingInstall) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    var offer = pendingInstall;
+    pendingInstall = null;
+    window.PAPALITA_EARLY_INSTALL_EVENT = null;
+    offer.prompt();
+    Promise.resolve(offer.userChoice).then(function (choice) {
+      if (choice && choice.outcome === 'dismissed') {
+        /* Chrome decides whether another prompt can be offered. */
+      }
+    }).catch(function (err) { console.warn('[Papalita] Install prompt:', err); });
+  }, true);
+})();
+</script>
+<link rel="manifest" href="manifest.webmanifest?v=papalita-20261027-install2">
 <link rel="icon" type="image/png" href="images/papalita_mark_color.png">
 <link rel="apple-touch-icon" href="images/papalita_mark_color.png">
 
@@ -1675,11 +1705,11 @@ main {
 <noscript>Papalita needs JavaScript to run.</noscript>
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-<script src="js/config.js?v=papalita-20261026e"></script>
-<script src="js/supabase.js?v=papalita-20261026e"></script>
-<script src="js/images.js?v=papalita-20261026e"></script>
-<script src="js/data.js?v=papalita-20261026e"></script>
-<script src="js/app.js?v=papalita-20261026e"></script>
+<script src="js/config.js?v=papalita-20261027-install2"></script>
+<script src="js/supabase.js?v=papalita-20261027-install2"></script>
+<script src="js/images.js?v=papalita-20261027-install2"></script>
+<script src="js/data.js?v=papalita-20261027-install2"></script>
+<script src="js/app.js?v=papalita-20261027-install2"></script>
 
 <script>
 (function () {
