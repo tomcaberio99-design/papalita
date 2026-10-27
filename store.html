@@ -352,6 +352,21 @@ function draw() { if (!storeUuid) return gate(); const r = me ? R(me) : {name:se
 /* PAPALITA UNIVERSAL MERCHANT DASHBOARD — only approved, owned store data */
 const PAPA_TYPES=['Restaurant','Carinderia','Café / Coffee Shop','Milk Tea Shop','Bakery','Snack House','Grill / BBQ','Pizza / Pasta','Desserts','Food Stall','Catering','Other food business'];
 let papaProducts=[], papaLoadSeq=0;
+let papaLiveOrders=[], papaOrdersLoading=false, papaOrdersError='', papaOrdersStore=null, papaOrdersSeq=0;
+async function papaFetchOrders(){
+ const id=storeUuid, seq=++papaOrdersSeq;
+ if(!id)return;
+ papaOrdersLoading=true;papaOrdersError='';
+ if(tab==='orders')draw();
+ try{
+  if(!OPS.fetchOrdersWithItems)throw Error('Update js/ops.js with Supabase order helpers.');
+  const rows=await OPS.fetchOrdersWithItems({storeId:id,limit:100});
+  if(id!==storeUuid||seq!==papaOrdersSeq)return;
+  papaLiveOrders=rows;papaOrdersStore=id;
+ }catch(e){if(id!==storeUuid||seq!==papaOrdersSeq)return;papaOrdersError=e.message||'Unable to load orders';console.error(e)}
+ finally{if(id===storeUuid&&seq===papaOrdersSeq){papaOrdersLoading=false;if(tab==='orders')draw()}}
+}
+
 const papaStore=()=>sellerStores.find(x=>x.id===storeUuid)||{};
 const papaCateringEligible=st=>/^(restaurant|carinderia|bulaloan|specialty[_\s-]*restaurant)$/i.test(String(st.business_type||'').trim());
 const papaCateringOn=st=>papaCateringEligible(st)&&st.catering_enabled===true;
@@ -361,7 +376,7 @@ function papaShell(content){
  const nav=sections.map(([key,label])=>`<button class="papa-nav ${tab===key?'active':''}" data-papa-tab="${key}"><span>${papaIcon[key]}</span>${label}</button>`).join('');
  const logo=st.logo_url?`<img class="papa-avatar" src="${esc(st.logo_url)}" alt="Store logo">`:'<span class="papa-avatar papa-empty-avatar">🍽</span>';
  $('#root').innerHTML=`<div class="papa-shell"><aside class="papa-side"><img src="${LOGO.white}" alt="Papalita" class="papa-brand"><div class="papa-side-caption">MERCHANT PORTAL</div><nav>${nav}</nav><div class="papa-side-foot">Papalita · Good Food, Good Mood</div></aside><div class="papa-work"><header class="papa-top"><div class="papa-identity">${logo}<div><strong>${esc(st.name||'Your Store')}</strong><small>${esc(st.business_type||'Food establishment')} · <span class="papa-approved">✓ Approved</span></small></div></div><div class="papa-top-right">${sellerStores.length>1?`<select class="in" id="papa-storepick">${sellerStores.map(x=>`<option value="${esc(x.id)}" ${x.id===storeUuid?'selected':''}>${esc(x.name)}</option>`).join('')}</select>`:''}<button class="papa-signout" id="papa-logout">Sign out</button></div></header><main class="papa-main"><div id="papa-content">${content}</div></main></div></div>`;
- $$('[data-papa-tab]').forEach(b=>b.onclick=()=>{tab=b.dataset.papaTab;draw()});
+ $$('[data-papa-tab]').forEach(b=>b.onclick=()=>{tab=b.dataset.papaTab;draw();if(tab==='orders')void papaFetchOrders()});
  $('#papa-logout').onclick=async()=>{await db.auth.signOut();storeUuid=null;me=null;gate()};
  const pick=$('#papa-storepick');if(pick)pick.onchange=()=>selectStore(pick.value).catch(e=>toast(e.message));
 }
@@ -373,11 +388,25 @@ function papaDashboard(){
 }
 function papaProfile(){const st=papaStore();return `<div class="papa-heading"><div><h1>Store Profile</h1><p>Edit your approved food establishment details.</p></div></div><form id="papa-profile-form" class="papa-card papa-form"><div class="papa-cover" style="${st.cover_url?`background-image:url('${encodeURI(st.cover_url).replace(/'/g,'%27')}')`:''}"><span>Store cover photo</span></div><div class="papa-fields"><div class="field"><label>Store logo / profile photo</label><input class="in" type="file" id="papa-logo-file" accept="image/png,image/jpeg,image/webp"><small>JPEG, PNG or WebP · max 5 MB</small></div><div class="field"><label>Cover photo</label><input class="in" type="file" id="papa-cover-file" accept="image/png,image/jpeg,image/webp"><small>JPEG, PNG or WebP · max 5 MB</small></div><div class="field"><label>Store name</label><input class="in" id="papa-name" maxlength="120" required value="${esc(st.name||'')}"></div><div class="field"><label>Food business type</label><select class="in" id="papa-type">${PAPA_TYPES.map(t=>`<option ${st.business_type===t?'selected':''}>${esc(t)}</option>`).join('')}</select></div><div class="field papa-full"><label>Description</label><textarea class="in" id="papa-description" rows="3">${esc(st.description||'')}</textarea></div><div class="field papa-full"><label>Complete address</label><textarea class="in" id="papa-address" rows="2" required>${esc(st.address||'')}</textarea></div><div class="field"><label>Contact number</label><input class="in" id="papa-phone" type="tel" value="${esc(st.phone||'')}"></div><div class="field papa-full" id="papa-catering-setting" ${papaCateringEligible(st)?'':'hidden'}><label><input type="checkbox" id="papa-catering-enabled" ${papaCateringOn(st)?'checked':''}> Offer catering services (optional for restaurants)</label><small>Cafés and beverage shops cannot enable catering.</small></div><div class="field"><label>Open time</label><input class="in" id="papa-open" type="time" value="${esc(st.open_time||'08:00')}"></div><div class="field"><label>Close time</label><input class="in" id="papa-close" type="time" value="${esc(st.close_time||'21:00')}"></div></div><p id="papa-profile-error" class="err"></p><button class="btn p" type="submit" id="papa-save-profile">Save store information</button></form>`;}
 function papaInventory(){const low=papaProducts.filter(p=>Number(p.stock)<=Number(p.low_stock_threshold??5));return `<div class="papa-heading"><div><h1>Inventory</h1><p>${low.length} product(s) at or below their stock warning threshold.</p></div><button class="btn s" id="papa-refresh">↻ Refresh</button></div><div class="papa-card papa-table-wrap"><table class="papa-table"><thead><tr><th>Product</th><th>Current stock</th><th>Low-stock alert</th><th>Status</th><th>Action</th></tr></thead><tbody>${papaProducts.map(p=>`<tr data-inv-id="${esc(p.id)}"><td><b>${esc(p.name)}</b></td><td><input class="in" type="number" min="0" step="1" data-stock value="${Number(p.stock)||0}"></td><td><input class="in" type="number" min="0" step="1" data-threshold value="${Number(p.low_stock_threshold??5)}"></td><td>${Number(p.stock)===0?'<span class="papa-danger">Sold out</span>':Number(p.stock)<=Number(p.low_stock_threshold??5)?'<span class="papa-warn">Low stock</span>':'<span class="papa-good">In stock</span>'}</td><td><button class="btn p sm" data-save-stock>Update</button></td></tr>`).join('')||'<tr><td colspan="5">No products yet. Add your first product.</td></tr>'}</tbody></table></div>`;}
-function papaOrders(){return `<div class="papa-heading"><div><h1>Orders</h1><p>Customer orders for this store.</p></div></div><div class="papa-card"><h2>Live orders not connected yet</h2><p class="papa-muted">Your existing customer checkout and js/ops.js still use localStorage. Orders are intentionally not shown as real Supabase orders. Connect orders and order_items with store-scoped RLS before enabling accept/prepare/complete.</p></div>`;}
+function papaOrders(){
+ const head=`<div class="papa-heading"><div><h1>Orders</h1><p>Live customer orders for ${esc(papaStore().name||'your store')}.</p></div><button class="btn s" id="papa-orders-refresh">↻ Refresh</button></div>`;
+ if(papaOrdersLoading&&papaOrdersStore!==storeUuid)return head+'<div class="papa-card"><p>Loading orders from Supabase...</p></div>';
+ if(papaOrdersError)return head+`<div class="papa-card"><h2>Unable to load orders</h2><p class="papa-danger">${esc(papaOrdersError)}</p></div>`;
+ if(papaOrdersStore!==storeUuid)return head+'<div class="papa-card"><p>Open Orders to load this store’s orders.</p></div>';
+ if(!papaLiveOrders.length)return head+'<div class="papa-card"><h2>No customer orders yet</h2><p class="papa-muted">Orders saved to Supabase will appear here. Customer checkout must also be connected.</p></div>';
+ return head+`<div class="papa-card"><b>${papaLiveOrders.length} order(s)</b><p class="papa-muted">Showing authorized Supabase orders for this store.</p></div>`+papaLiveOrders.map(o=>{
+  const status=String(o.status||'pending');
+  const rows=(o.items||[]).map(i=>`<div class="row sp wrap" style="padding:8px 0;border-bottom:1px solid #edf2ee"><div><b>${Number(i.quantity)||0} × ${esc(i.product_name||'Product')}</b>${i.selected_options&&Object.keys(i.selected_options).length?`<p class="papa-muted">${esc(JSON.stringify(i.selected_options))}</p>`:''}${i.special_instructions?`<p class="papa-muted">Note: ${esc(i.special_instructions)}</p>`:''}</div><b>${peso(i.line_total)}</b></div>`).join('');
+  const when=new Date(o.created_at).toLocaleString('en-PH',{dateStyle:'medium',timeStyle:'short'});
+  return `<div class="papa-card"><div class="row sp wrap"><div><h2>Order #${esc(String(o.id).slice(0,8))}</h2><p class="papa-muted">${esc(when)}</p></div><span class="status ${status==='completed'?'open':status==='cancelled'?'closed':'n'}">${esc(status.replaceAll('_',' ').toUpperCase())}</span></div><h3>Products</h3>${rows||'<p class="papa-muted">No items visible. Check order_items SELECT RLS.</p>'}<p><b>Fulfillment:</b> ${esc(o.fulfillment_type||'delivery')}</p><p><b>Address:</b> ${esc(o.delivery_address||'Not provided')}</p><p><b>Contact:</b> ${esc(o.contact_number||'Not provided')}</p><p><b>Payment:</b> ${esc(o.payment_method||'Not specified')} · ${esc(o.payment_status||'unpaid')}</p><div class="row sp wrap" style="padding-top:12px;border-top:1px solid #edf2ee"><span class="papa-muted">Order total</span><strong style="font-size:22px;color:#087f45">${peso(o.total_amount)}</strong></div><p class="papa-muted" style="font-size:11px">Reference: ${esc(o.id)}</p></div>`;
+ }).join('');
+}
+
 function papaReports(){return `<div class="papa-heading"><div><h1>Sales & Reports</h1><p>Store sales and best-selling products.</p></div></div><div class="papa-kpis">${papaKpi('Today','—','No verified sales feed')}${papaKpi('This week','—','No verified sales feed')}${papaKpi('This month','—','No verified sales feed')}</div><div class="papa-card"><h2>Sales history</h2><p class="papa-muted">This section will calculate actual sales from completed orders after the Supabase orders migration. No demo orders or estimated revenue are counted.</p></div>`;}
 function papaSettings(){const st=papaStore();return `<div class="papa-heading"><div><h1>Settings</h1><p>Manage store availability and account settings.</p></div></div><div class="papa-card"><h2>Store availability</h2><label class="papa-toggle"><input type="checkbox" id="papa-open-toggle" ${st.is_open!==false?'checked':''}> Accepting orders (store open)</label><p class="papa-muted">This setting is saved to Supabase. The customer app must read this field to enforce closed-store checkout.</p><button class="btn p" id="papa-save-settings">Save availability</button></div><div class="papa-card"><h2>Store identity</h2><p class="papa-muted">Store name, contact, logo, cover photo and hours are editable in Store Profile.</p><button class="btn s" data-jump="profile">Go to Store Profile</button></div>`;}
 async function papaUpload(file,kind){if(!file)return null;if(file.size>5*1024*1024)throw Error('Photo must be 5 MB or smaller');const ext={'image/jpeg':'jpg','image/png':'png','image/webp':'webp'}[file.type];if(!ext)throw Error('Please use JPEG, PNG or WebP');const path=`${storeUuid}/${kind}-${crypto.randomUUID()}.${ext}`;const q=await db.storage.from('store-images').upload(path,file,{contentType:file.type,upsert:false});if(q.error)throw Error('Photo upload failed: '+q.error.message+' (check store-images Storage RLS)');return db.storage.from('store-images').getPublicUrl(path).data.publicUrl;}
 async function papaBind(){
+ const orderRefresh=$('#papa-orders-refresh');if(orderRefresh)orderRefresh.onclick=()=>{void papaFetchOrders()};
  $$('[data-jump]').forEach(b=>b.onclick=()=>{tab=b.dataset.jump;draw()});
  const refresh=$('#papa-refresh');if(refresh)refresh.onclick=()=>papaLoad().catch(e=>toast(e.message));
  const typeSelect=$('#papa-type');if(typeSelect)typeSelect.onchange=()=>{const field=$('#papa-catering-setting');if(field){const allowed=papaCateringEligible({business_type:typeSelect.value});field.hidden=!allowed;if(!allowed)$('#papa-catering-enabled').checked=false;}};
@@ -386,7 +415,7 @@ async function papaBind(){
  const save=$('#papa-save-settings');if(save)save.onclick=async()=>{save.disabled=true;try{const q=await db.from('stores').update({is_open:$('#papa-open-toggle').checked}).eq('id',storeUuid).eq('status','approved').select('*').single();if(q.error)throw q.error;Object.assign(papaStore(),q.data);toast('Store availability saved')}catch(e){toast(e.message)}finally{save.disabled=false}};
 }
 function draw(){if(!storeUuid)return gate();if(tab==='cat'&&!papaCateringOn(papaStore()))tab='dashboard';const content=tab==='dashboard'?papaDashboard():tab==='profile'?papaProfile():tab==='menu'?'<div id="papalita-products" class="papa-card">Loading products...</div>':tab==='inventory'?papaInventory():tab==='orders'?papaOrders():tab==='reports'?papaReports():tab==='settings'?papaSettings():`<div class="papa-heading"><div><h1>Catering Requests</h1><p>Manage your Supabase catering inquiries.</p></div><button class="btn s" id="papa-catering-refresh">↻ Refresh</button></div>${realCateringHTML()}`;papaShell(content);papaBind();if(tab==='menu')renderSellerProducts();if(tab==='cat'){$$('[data-real-status]').forEach(el=>el.onchange=async()=>{try{await updateCatering(el.dataset.realStatus,el.value)}catch(e){toast(e.message)}});const b=$('#papa-catering-refresh');if(b)b.onclick=async()=>{await fetchCatering();draw()}}}
-async function papaLoad(){const seq=++papaLoadSeq;try{await papaFetchProducts();if(seq===papaLoadSeq)draw()}catch(e){toast('Products: '+e.message);if(seq===papaLoadSeq)draw()}}
+async function papaLoad(){const seq=++papaLoadSeq;try{await papaFetchProducts();if(seq===papaLoadSeq)draw();if(seq===papaLoadSeq&&tab==='orders')await papaFetchOrders()}catch(e){toast('Products: '+e.message);if(seq===papaLoadSeq)draw()}}
 
 // Per-product customization stored as products.options JSONB; no shared hardcoded coffee choices.
 let sellerOptionGroups=[];
@@ -446,379 +475,3 @@ async function renderSellerProducts(){
 setInterval(() => { if (me && tab!=='cat' && !/INPUT|SELECT|TEXTAREA/.test(document.activeElement.tagName) && ['new', 'prep', 'out', 'hist'].includes(tab)) draw(); }, 4000); (async()=>{try{db=client();const {data,error}=await db.auth.getUser();if(error||!data?.user){gate();return;}if(!await completeApplication(data.user))await authorize(data.user);}catch(e){gate(e.message);}})();
 })();
 </script></body></html>
-
-<!-- PAPALITA LIVE STORE ORDERS INTEGRATION -->
-<script>
-(() => {
-  'use strict';
-
-  const $ = (selector, root = document) =>
-    root.querySelector(selector);
-
-  const esc = value => String(value ?? '').replace(
-    /[&<>"']/g,
-    char => ({
-      '&': '&amp;',
-      '<': '&lt;',
-      '>': '&gt;',
-      '"': '&quot;',
-      "'": '&#39;'
-    }[char])
-  );
-
-  const peso = amount =>
-    '₱' + Number(amount || 0).toLocaleString(
-      'en-PH',
-      {
-        minimumFractionDigits: 2,
-        maximumFractionDigits: 2
-      }
-    );
-
-  let loading = false;
-  let lastLoad = 0;
-  let lastStoreId = null;
-
-  function ordersPageActive() {
-    return !!document.querySelector(
-      '[data-papa-tab="orders"].active'
-    );
-  }
-
-  function ordersContainer() {
-    return document.querySelector('#papa-content');
-  }
-
-  function show(html) {
-    const target = ordersContainer();
-
-    if (!target || !ordersPageActive()) return;
-
-    target.innerHTML = html;
-    target.dataset.liveOrders = 'true';
-
-    const refresh = $('#papa-live-refresh');
-
-    if (refresh) {
-      refresh.onclick = () => loadOrders(true);
-    }
-  }
-
-  function heading() {
-    return `
-      <div class="papa-heading">
-        <div>
-          <h1>Orders</h1>
-          <p>Live customer orders from Supabase.</p>
-        </div>
-
-        <button
-          type="button"
-          class="btn s"
-          id="papa-live-refresh"
-        >
-          ↻ Refresh
-        </button>
-      </div>
-    `;
-  }
-
-  async function getStoreId() {
-    const db = window.PAPALITA_DB;
-
-    if (!db) {
-      throw new Error('Supabase connection not found.');
-    }
-
-    const { data: auth, error: authError } =
-      await db.auth.getUser();
-
-    if (authError) throw authError;
-
-    if (!auth?.user) {
-      throw new Error('Please sign in again.');
-    }
-
-    const { data: stores, error } = await db
-      .from('stores')
-      .select('id, name')
-      .eq('owner_id', auth.user.id)
-      .eq('status', 'approved');
-
-    if (error) throw error;
-
-    if (!stores?.length) {
-      throw new Error('No approved store found.');
-    }
-
-    const selected = $('#papa-storepick')?.value;
-
-    if (selected) {
-      const match = stores.find(s => s.id === selected);
-
-      if (!match) {
-        throw new Error('Selected store is not assigned to you.');
-      }
-
-      return match.id;
-    }
-
-    return stores[0].id;
-  }
-
-  function orderCard(order) {
-    const date = new Date(order.created_at)
-      .toLocaleString('en-PH', {
-        dateStyle: 'medium',
-        timeStyle: 'short'
-      });
-
-    const products = (order.items || [])
-      .map(item => {
-        const options = item.selected_options &&
-          Object.keys(item.selected_options).length
-          ? `<div class="papa-muted" style="font-size:12px">
-              ${esc(JSON.stringify(item.selected_options))}
-            </div>`
-          : '';
-
-        return `
-          <div
-            class="row sp"
-            style="
-              padding:10px 0;
-              border-bottom:1px solid #edf2ee;
-              align-items:flex-start;
-            "
-          >
-            <div>
-              <b>
-                ${Number(item.quantity)} ×
-                ${esc(item.product_name)}
-              </b>
-              ${options}
-              ${item.special_instructions
-                ? `<p class="papa-muted">
-                    Note: ${esc(item.special_instructions)}
-                  </p>`
-                : ''}
-            </div>
-
-            <b>${peso(item.line_total)}</b>
-          </div>
-        `;
-      }).join('');
-
-    const status = String(order.status || 'pending');
-    const statusClass = status === 'completed'
-      ? 'open'
-      : status === 'cancelled'
-        ? 'closed'
-        : 'n';
-
-    return `
-      <div class="papa-card">
-        <div class="row sp wrap">
-          <div>
-            <h2 style="margin:0">
-              Order #${esc(order.id.slice(0, 8))}
-            </h2>
-            <p class="papa-muted">${esc(date)}</p>
-          </div>
-
-          <span class="status ${statusClass}">
-            ${esc(status.replaceAll('_', ' ').toUpperCase())}
-          </span>
-        </div>
-
-        <div style="margin:15px 0">
-          <h3>Ordered products</h3>
-          ${products || '<p class="papa-muted">No order items available.</p>'}
-        </div>
-
-        <div
-          style="
-            border-top:1px solid #edf2ee;
-            padding-top:14px;
-          "
-        >
-          <p>
-            <b>Fulfillment:</b>
-            ${esc(order.fulfillment_type || 'delivery')}
-          </p>
-
-          <p>
-            <b>Delivery address:</b>
-            ${esc(order.delivery_address || 'Not provided')}
-          </p>
-
-          <p>
-            <b>Contact number:</b>
-            ${esc(order.contact_number || 'Not provided')}
-          </p>
-
-          <p>
-            <b>Payment method:</b>
-            ${esc(order.payment_method || 'Not specified')}
-          </p>
-
-          <p>
-            <b>Payment status:</b>
-            ${esc(order.payment_status || 'unpaid')}
-          </p>
-        </div>
-
-        <div
-          class="row sp wrap"
-          style="
-            margin-top:16px;
-            padding-top:14px;
-            border-top:1px solid #edf2ee;
-          "
-        >
-          <span class="papa-muted">Order total</span>
-          <strong style="font-size:22px;color:#087f45">
-            ${peso(order.total_amount)}
-          </strong>
-        </div>
-
-        <p
-          class="papa-muted"
-          style="font-size:11px;margin-top:12px"
-        >
-          Reference: ${esc(order.id)}
-        </p>
-      </div>
-    `;
-  }
-
-  async function loadOrders(force = false) {
-    if (!ordersPageActive() || loading) return;
-
-    if (!window.OPS?.fetchOrdersWithItems) {
-      show(
-        heading() +
-        `<div class="papa-card">
-          <h2>Orders integration unavailable</h2>
-          <p class="papa-danger">
-            Update js/ops.js with the Supabase order functions first.
-          </p>
-        </div>`
-      );
-      return;
-    }
-
-    loading = true;
-
-    show(
-      heading() +
-      `<div class="papa-card">
-        <p class="papa-muted">
-          Loading live orders from Supabase...
-        </p>
-      </div>`
-    );
-
-    try {
-      const storeId = await getStoreId();
-
-      const orders = await window.OPS.fetchOrdersWithItems({
-        storeId,
-        limit: 100
-      });
-
-      if (!ordersPageActive()) return;
-
-      const currentStore = $('#papa-storepick')?.value;
-
-      if (currentStore && currentStore !== storeId) return;
-
-      lastStoreId = storeId;
-      lastLoad = Date.now();
-
-      if (!orders.length) {
-        show(
-          heading() +
-          `<div class="papa-card">
-            <div class="empty">
-              <h3>No customer orders yet</h3>
-              <p>
-                Real orders saved to Supabase will appear here.
-              </p>
-            </div>
-          </div>`
-        );
-        return;
-      }
-
-      show(
-        heading() +
-        `<div class="papa-card">
-          <b>${orders.length} order(s) found</b>
-          <p class="papa-muted">
-            Showing actual orders for your approved store.
-          </p>
-        </div>` +
-        orders.map(orderCard).join('')
-      );
-
-    } catch (error) {
-      console.error('[Papalita] Live orders error:', error);
-
-      show(
-        heading() +
-        `<div class="papa-card">
-          <h2>Could not load orders</h2>
-          <p class="papa-danger">
-            ${esc(error.message || 'Unknown error')}
-          </p>
-          <p class="papa-muted">
-            Check Supabase RLS policies and browser console.
-          </p>
-        </div>`
-      );
-    } finally {
-      loading = false;
-    }
-  }
-
-  // Detect when the existing Merchant Portal
-  // opens or redraws its Orders page.
-  const observer = new MutationObserver(() => {
-    if (!ordersPageActive()) return;
-
-    const target = ordersContainer();
-    if (!target) return;
-
-    if (target.dataset.liveOrders !== 'true') {
-      void loadOrders();
-    }
-  });
-
-  const root = $('#root');
-
-  if (root) {
-    observer.observe(root, {
-      childList: true,
-      subtree: true
-    });
-  }
-
-  // Refresh while Orders page is visible.
-  // Does not modify other merchant pages.
-  setInterval(() => {
-    if (!ordersPageActive() || loading) return;
-
-    const selectedStore = $('#papa-storepick')?.value;
-
-    if (
-      Date.now() - lastLoad >= 15000 ||
-      (selectedStore && selectedStore !== lastStoreId)
-    ) {
-      void loadOrders();
-    }
-  }, 15000);
-
-  console.log('[Papalita] Live Store Orders integration loaded.');
-})();
-</script>
