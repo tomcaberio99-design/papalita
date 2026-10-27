@@ -812,7 +812,7 @@ async function doRegister(f) {
   if (AU.busy) return;
   AU.busy = true;
   try {
-    const redirect = location.origin + location.pathname;
+    const redirect = 'https://tomcaberio99-design.github.io/papalita/';
     const {error} = await authDB().auth.signUp({
       email,password,
       options:{ emailRedirectTo:redirect, data:{full_name:name,phone,barangay} }
