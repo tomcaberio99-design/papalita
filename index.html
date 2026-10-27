@@ -55,7 +55,7 @@
     var box = document.createElement('div');
     box.setAttribute('role','dialog'); box.setAttribute('aria-modal','true'); box.setAttribute('aria-label', success ? 'Papalita installed' : 'Install Papalita');
     box.style.cssText = 'background:#fff;color:#173321;border-radius:24px;padding:28px 22px;max-width:380px;width:100%;text-align:center;box-shadow:0 20px 70px #0004';
-    box.innerHTML = '<div style="font-size:44px;margin-bottom:10px">' + (success ? '🎉' : '📲') + '</div>' +
+    box.innerHTML = (success ? '<div style="font-size:32px;margin-bottom:10px">🎉</div>' : '') +
       '<h2 style="font-size:23px;margin:0 0 10px">' + (success ? 'Papalita Installed!' : 'Install Papalita') + '</h2>' +
       '<p style="font-size:14px;line-height:1.6;color:#526357;margin:0 0 20px">' +
       (success ? 'Papalita has been added to your device. You can now open it from your home screen.' : 'Get faster access to your favorite stores and food. Add Papalita to your home screen!') + '</p>' +
