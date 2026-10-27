@@ -1,7 +1,6 @@
-/* Papalita PWA — versioned network-first cache and push event support.
-   Push delivery requires a separately configured server and subscriptions. */
-const CACHE = 'papalita-static-20261026e';
-const APP_SHELL = ['./', './index.html', './manifest.webmanifest', './images/papalita-icon-192.png', './images/papalita-icon-512.png'];
+/* Papalita PWA — aligned with manifest v2 icons */
+const CACHE = 'papalita-static-20261027-install-v2';
+const APP_SHELL = ['./', './index.html', './manifest.webmanifest', './images/papalita-icon-192-v2.png', './images/papalita-icon-512-v2.png'];
 self.addEventListener('install', event => {
   event.waitUntil((async () => {
     const cache = await caches.open(CACHE);
@@ -24,7 +23,6 @@ self.addEventListener('fetch', event => {
   if (req.method !== 'GET' || new URL(req.url).origin !== self.location.origin) return;
   event.respondWith((async () => {
     try {
-      // Always revalidate online; avoid stale script bytes from HTTP cache.
       const res = await fetch(req, {cache:'no-store'});
       if (res.ok && !req.url.includes('/api/')) {
         const cache = await caches.open(CACHE);
@@ -42,8 +40,8 @@ self.addEventListener('push', event => {
   const title = String(data.title || 'Papalita');
   const options = {
     body: String(data.body || 'You have an order update.'),
-    icon: './images/papalita-icon-192.png',
-    badge: './images/papalita-icon-192.png',
+    icon: './images/papalita-icon-192-v2.png',
+    badge: './images/papalita-icon-192-v2.png',
     tag: String(data.tag || data.order_id || 'papalita-update'),
     data: {url: typeof data.url === 'string' && data.url.startsWith('./') ? data.url : './#/orders'}
   };
