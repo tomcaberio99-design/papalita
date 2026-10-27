@@ -39,6 +39,52 @@
   }, true);
 })();
 </script>
+<script id="papalita-install-welcome">
+(function () {
+  'use strict';
+  var KEY = 'papalita.install.invite.dismissed';
+  var standalone = function () { return matchMedia('(display-mode: standalone)').matches || navigator.standalone === true; };
+  var isInApp = function () { return /FBAN|FBAV|FB_IAB|Instagram|Messenger/i.test(navigator.userAgent); };
+  var overlay = null;
+  function close() { if (overlay) { overlay.remove(); overlay = null; } }
+  function show(success) {
+    if (overlay || (!success && (standalone() || sessionStorage.getItem(KEY)))) return;
+    overlay = document.createElement('div');
+    overlay.id = 'papalita-install-dialog';
+    overlay.style.cssText = 'position:fixed;inset:0;z-index:10050;background:rgba(12,30,18,.65);display:flex;align-items:center;justify-content:center;padding:20px;font-family:system-ui,-apple-system,sans-serif';
+    var box = document.createElement('div');
+    box.setAttribute('role','dialog'); box.setAttribute('aria-modal','true'); box.setAttribute('aria-label', success ? 'Papalita installed' : 'Install Papalita');
+    box.style.cssText = 'background:#fff;color:#173321;border-radius:24px;padding:28px 22px;max-width:380px;width:100%;text-align:center;box-shadow:0 20px 70px #0004';
+    box.innerHTML = '<div style="font-size:44px;margin-bottom:10px">' + (success ? '🎉' : '📲') + '</div>' +
+      '<h2 style="font-size:23px;margin:0 0 10px">' + (success ? 'Papalita Installed!' : 'Install Papalita') + '</h2>' +
+      '<p style="font-size:14px;line-height:1.6;color:#526357;margin:0 0 20px">' +
+      (success ? 'Papalita has been added to your device. You can now open it from your home screen.' : 'Get faster access to your favorite stores and food. Add Papalita to your home screen!') + '</p>' +
+      '<button type="button" id="papalita-install-primary" style="width:100%;background:#087F32;color:#fff;border:0;border-radius:14px;padding:15px;font-size:16px;font-weight:700;cursor:pointer">' +
+      (success ? 'Open Papalita' : 'Install Now') + '</button>' +
+      '<button type="button" id="papalita-install-later" style="width:100%;margin-top:10px;background:transparent;color:#66746b;border:0;padding:12px;font-size:14px;cursor:pointer">' +
+      (success ? 'Close' : 'Maybe Later') + '</button>' +
+      '<p id="papalita-install-help" style="font-size:12px;color:#526357;line-height:1.5;margin:12px 0 0" hidden></p>';
+    overlay.appendChild(box); document.body.appendChild(overlay);
+    box.querySelector('#papalita-install-later').onclick = function () { sessionStorage.setItem(KEY, '1'); close(); };
+    box.querySelector('#papalita-install-primary').onclick = function () {
+      if (success) { close(); location.href = './index.html#/'; return; }
+      var offer = window.PAPALITA_EARLY_INSTALL_EVENT || window.PAPALITA_INSTALL_PROMPT;
+      if (offer) {
+        window.PAPALITA_EARLY_INSTALL_EVENT = null;
+        window.PAPALITA_INSTALL_PROMPT = null;
+        sessionStorage.setItem(KEY, '1'); close();
+        try { Promise.resolve(offer.prompt()).catch(function (e) { console.warn('Install prompt failed', e); }); }
+        catch (e) { console.warn('Install prompt failed', e); }
+        return;
+      }
+      var help = box.querySelector('#papalita-install-help'); help.hidden = false;
+      help.textContent = isInApp() ? 'You are using an in-app browser. Open the link in Google Chrome, then choose Install app from the Chrome menu.' : /iPad|iPhone|iPod/.test(navigator.userAgent) ? 'Open in Safari, tap Share, then Add to Home Screen.' : 'Open the Chrome three-dot menu and choose Install app or Add to Home screen. The browser controls whether direct installation is available.';
+    };
+  }
+  window.addEventListener('appinstalled', function () { sessionStorage.setItem(KEY, '1'); close(); show(true); });
+  window.addEventListener('load', function () { setTimeout(function () { show(false); }, 1100); });
+})();
+</script>
 <link rel="manifest" href="manifest.webmanifest?v=papalita-20261027-install2">
 <link rel="icon" type="image/png" href="images/papalita_mark_color.png">
 <link rel="apple-touch-icon" href="images/papalita_mark_color.png">
