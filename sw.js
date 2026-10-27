@@ -1,5 +1,5 @@
 /* Papalita PWA — aligned with manifest v2 icons */
-const CACHE = 'papalita-static-20261027-notifications-v1';
+const CACHE = 'papalita-static-20261027-install-v2';
 const APP_SHELL = ['./', './index.html', './manifest.webmanifest', './images/papalita-icon-192-v2.png', './images/papalita-icon-512-v2.png'];
 self.addEventListener('install', event => {
   event.waitUntil((async () => {
@@ -43,14 +43,14 @@ self.addEventListener('push', event => {
     icon: './images/papalita-icon-192-v2.png',
     badge: './images/papalita-icon-192-v2.png',
     tag: String(data.tag || data.order_id || 'papalita-update'),
-    data: {url: typeof data.url === 'string' && /^#\/[a-z0-9/?=&_-]*$/i.test(data.url) ? './' + data.url : './#/notifications'}
+    data: {url: typeof data.url === 'string' && data.url.startsWith('./') ? data.url : './#/orders'}
   };
   event.waitUntil(self.registration.showNotification(title, options));
 });
 self.addEventListener('notificationclick', event => {
   event.notification.close();
   event.waitUntil((async () => {
-    const target = new URL(event.notification.data?.url || './#/notifications', self.registration.scope).href;
+    const target = new URL(event.notification.data?.url || './#/orders', self.registration.scope).href;
     const clientsList = await clients.matchAll({type:'window',includeUncontrolled:true});
     const existing = clientsList.find(c => c.url.startsWith(self.registration.scope));
     if (existing) { await existing.navigate(target); return existing.focus(); }
