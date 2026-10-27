@@ -124,6 +124,9 @@ try {
 
 applyStoreDetails(restaurant, onlineStore);
 
+// CRITICAL: use the real Supabase store UUID for checkout, including matched legacy stores.
+restaurant.id = String(onlineStore.id);
+
 // Keep the local menu if there are no online products.
 if (!Array.isArray(onlineStore.items)) continue;
         const onlineItems = onlineStore.items.map(product => ({
