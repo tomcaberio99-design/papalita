@@ -7,7 +7,7 @@
   const state = { user: null, rows: [], panel: false };
 
   // Add your VAPID PUBLIC key after Supabase push setup.
-  const vapidPublicKey = '';
+  const vapidPublicKey = ' BIcPxYq1yt-b1NcNV61wT8Ix8KLEAc6pFsmQJZzYYcF8JOnpQS1_dCXW3JzhSdwxKsTgPOBwY8fiCal_oRk9vT8';
 
   const esc = value => String(value ?? '').replace(
     /[&<>"']/g,
