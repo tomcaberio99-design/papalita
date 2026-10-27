@@ -534,7 +534,7 @@ V.cartView = () => { const c = calc();
   <div class="sum" style="margin-top:18px;font-size:18px"><div class="r mu"><span>Order Subtotal</span><b style="color:var(--ink)">${peso(c.sub)}</b></div><div class="r mu"><span>${CK.fulfillment === 'pickup' ? 'Pickup Fee' : 'Delivery Fee'}</span><b style="color:var(--ink)">${fee}</b></div>${c.disc && c.promo.type !== 'ship' ? `<div class="r gl"><span>Promo ${esc(c.promo.code)}</span><b>−${peso(c.disc)}</b></div>` : ''}${tip ? `<div class="r mu"><span>Rider tip</span><b style="color:var(--ink)">${peso(tip)}</b></div>` : ''}<p class="sm mu">Includes ${peso(c.vat)} VAT (12%).</p></div>
   ${!c.minOk ? `<p class="err" style="margin:10px 0">Some stores have not reached their minimum order amount.</p>` : ''}
   <button class="pbar" id="place" data-a="place" ${c.minOk ? '' : 'disabled'}><span>Place Order</span><i></i><b>${peso(c.total + tip)}</b></button>
-  <p class="mu sm" style="text-align:center;margin-top:12px;letter-spacing:.04em">TAPPING PLACE ORDER CONFIRMS YOUR ACCEPTANCE OF TERMS</p><p style="text-align:center;margin-top:8px"><span class="sm mu">Orders are saved on this device only until Supabase order sync is connected. Cash payment only.</span></p></section>` }; };
+  <p class="mu sm" style="text-align:center;margin-top:12px;letter-spacing:.04em">TAPPING PLACE ORDER CONFIRMS YOUR ACCEPTANCE OF TERMS</p><p style="text-align:center;margin-top:8px"><span class="sm mu">Orders are submitted securely to Papalita. Cash payment only.</span></p></section>` }; };
 
 /* ---------- checkout ---------- */
 let CK = { addr: null, pay: 'cod', det: {}, fulfillment: 'delivery', tip: 0 };
@@ -554,35 +554,57 @@ function payPick() { const el = openSheet(`<form class="pd" style="padding-top:3
 async function placeOrder() {
   const c = calc(), a = S.addrs.find(x => x.id === CK.addr) || defAddr();
   if (!S.cart.lines.length) return;
-  const phone = ($('#cp').value || '').trim().replace(/\s/g, '');
-  $('#cpe').textContent = ''; $('#cp').classList.remove('bad');
+  const phoneField = $('#cp'), phone = (phoneField.value || '').trim().replace(/\s/g, '');
+  $('#cpe').textContent = ''; phoneField.classList.remove('bad');
   if (CK.fulfillment !== 'pickup' && !a) { toast('Add a delivery address first.'); return addrForm(); }
-  if (!PH.test(phone)) { $('#cp').classList.add('bad'); $('#cpe').textContent = 'Use a PH mobile number like 09171234567.'; return $('#cp').focus(); }
+  if (!PH.test(phone)) { phoneField.classList.add('bad'); $('#cpe').textContent = 'Use a PH mobile number like 09171234567.'; return phoneField.focus(); }
   if (!c.minOk) return toast('One or more stores have not reached their minimum order.');
-  // No fake GCash/Maya/card authorization. COD for delivery; cash on pickup.
-  if (CK.pay !== 'cod') return toast('Online payments are not connected yet. Please select Cash on Delivery.');
+  if (CK.pay !== 'cod') return toast('Only cash payment is available.');
+  const db = window.PAPALITA_DB;
+  if (!db) return toast('Supabase is unavailable. Please try again.');
   const btn = $('#place'); btn.disabled = true; btn.firstElementChild.textContent = 'Placing orders…';
-  const createdAt = Date.now(), orders = c.groups.map((g, index) => {
-    const storeFee = CK.fulfillment === 'pickup' ? 0 : feeOf(g.rest);
-    // Allocate discount across stores proportionally; never exceed eligible amount.
-    const eligible = !c.promo?.rid || String(c.promo.rid) === String(g.rid);
-    const discountBase = c.promo?.rid ? c.groups.filter(x => String(x.rid) === String(c.promo.rid)).reduce((n,x)=>n+x.sub,0) : c.sub;
-    const discount = eligible && !c.perr && discountBase ? Math.min(g.sub + storeFee, Math.round(c.disc * g.sub / discountBase)) : 0;
-    const tip = CK.fulfillment === 'pickup' ? 0 : (index === 0 ? (CK.tip || 0) : 0);
-    return { id: 'FD-' + Math.floor(100000 + Math.random() * 900000) + '-' + index,
-      rid: g.rid, items: g.lines.map(l => ({...l})), sub: g.sub, fee: storeFee, disc: discount,
-      total: Math.max(0, g.sub + storeFee - discount + tip), tip,
-      promo: discount ? S.promo : null, createdAt, demo: false, status: 'active', stage: 0, upd: createdAt, uid: S.user.id,
-      fulfillment: CK.fulfillment, addr: CK.fulfillment === 'pickup' ? g.rest.addr : `${a.label} — ${a.line}${a.landmark ? ' (' + a.landmark + ')' : ''}, ${a.city}`,
-      note: ($('#di').value || '').trim(), contact: { name: S.user.name, phone },
-      pay: { method: 'cod', status: 'pending', demo: false } };
-  });
-  // Existing application uses localStorage, NOT Supabase. These are device-local orders.
-  S.user.phone = phone; CK.tip = 0; S.orders.unshift(...orders);
-  S.cart = { rid: null, lines: [] }; S.promo = null;
-  orders.forEach(o => notify('order', `Order placed · ${o.id}`, `${R(o.rid)?.name || 'Store'} order recorded on this device.`));
-  save(); updateChrome(); nav('/confirmation/' + orders[0].id);
-  if (orders.length > 1) toast(`${orders.length} separate store orders created on this device.`);
+  try {
+    const { data: auth, error: authError } = await db.auth.getUser();
+    if (authError) throw authError;
+    if (!auth?.user) throw new Error('Please sign in again before ordering.');
+    const address = CK.fulfillment === 'pickup' ? 'Pickup at store' : `${a.label} — ${a.line}${a.landmark ? ' (' + a.landmark + ')' : ''}, ${a.city}`;
+    const groups = c.groups.map((g, index) => {
+      if (!/^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(String(g.rid))) throw new Error('Invalid store ID. Refresh the menu and retry.');
+      const storeFee = CK.fulfillment === 'pickup' ? 0 : feeOf(g.rest);
+      const eligible = !c.promo?.rid || String(c.promo.rid) === String(g.rid);
+      const discountBase = c.promo?.rid ? c.groups.filter(x => String(x.rid) === String(c.promo.rid)).reduce((n,x)=>n+x.sub,0) : c.sub;
+      const discount = eligible && !c.perr && discountBase ? Math.min(g.sub + storeFee, Math.round(c.disc * g.sub / discountBase)) : 0;
+      const tip = CK.fulfillment === 'pickup' ? 0 : (index === 0 ? (CK.tip || 0) : 0);
+      return { store_id: g.rid, delivery_fee: storeFee, discount, tip,
+        items: g.lines.map(l => ({ product_id: l.itemId, quantity: l.qty, selected_options: l.sel || {}, special_instructions: l.note || '' })) };
+    });
+    // Atomic database transaction: do not clear the cart until the server confirms all orders.
+    const { data, error } = await db.rpc('papalita_place_orders', {
+      p_groups: groups, p_address: address, p_phone: phone,
+      p_fulfillment: CK.fulfillment, p_payment_method: 'cod'
+    });
+    if (error) throw error;
+    if (!Array.isArray(data) || data.length !== groups.length) throw new Error('Server did not confirm all store orders. Check order history before retrying.');
+    const createdAt = Date.now();
+    const orders = groups.map((g, index) => {
+      const group = c.groups[index], result = data[index];
+      return { id: result.order_id, rid: g.store_id, items: group.lines.map(l => ({ ...l })),
+        sub: Number(result.subtotal), fee: Number(result.delivery_fee), disc: g.discount,
+        total: Number(result.total_amount), tip: g.tip, promo: g.discount ? S.promo : null,
+        createdAt, demo: false, status: 'pending', stage: 0, upd: createdAt, uid: auth.user.id,
+        fulfillment: CK.fulfillment, addr: address, note: ($('#di').value || '').trim(),
+        contact: { name: S.user.name, phone }, pay: { method: 'cod', status: 'unpaid', demo: false } };
+    });
+    S.user.phone = phone; CK.tip = 0; S.orders.unshift(...orders);
+    S.cart = { rid: null, lines: [] }; S.promo = null;
+    orders.forEach(o => notify('order', `Order submitted · ${o.id}`, `${R(o.rid)?.name || 'Store'} order saved to Supabase.`));
+    save(); updateChrome(); nav('/confirmation/' + orders[0].id);
+    if (orders.length > 1) toast(`${orders.length} store orders submitted successfully.`);
+  } catch (error) {
+    console.error('[Papalita] Checkout failed:', error);
+    toast('Order not confirmed: ' + (error.message || 'Please try again.'));
+    btn.disabled = false; btn.firstElementChild.textContent = 'Place Order';
+  }
 }
 
 const ORD = id => S.orders.find(o => o.id === id);
