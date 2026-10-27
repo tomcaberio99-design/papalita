@@ -267,7 +267,12 @@ function addToCart(item, rest, sel, qty, note, replaceKey, fx) {
 
 const T = [0, 15, 35, 50, 65, 95];       // demo timeline (seconds). Production: driven by backend status events
 const STEPS = [['Order received', 'The restaurant has your order.', 'check'], ['Preparing your food', 'The kitchen is cooking.', 'fork'], ['Rider assigned', 'Marco is on the way to the restaurant.', 'user'], ['Picking up your order', 'Rider is at the restaurant.', 'store'], ['On the way', 'Your food is heading to you.', 'bike'], ['Delivered', 'Enjoy your meal!', 'home']];
-const stageOf = o => { if (o.status === 'cancelled' || o.status === 'refunded') return -1; if (o.demo === false) return o.stage; const e = (Date.now() - o.createdAt) / 1000; let s = 0; T.forEach((t, i) => { if (e >= t) s = i; }); return s; };
+const stageOf = o => {
+  if (o.status === 'cancelled' || o.status === 'refunded') return -1;
+  if (o.demo === false) return ({pending:0,confirmed:0,preparing:1,ready:3,out_for_delivery:4,completed:5})[o.status] ?? 0;
+  const e = (Date.now() - o.createdAt) / 1000;
+  let s = 0; T.forEach((t, i) => { if (e >= t) s = i; }); return s;
+};
 const isCurrent = o => { const s = stageOf(o); return s >= 0 && s < 5; };
 const etaMin = o => { const r = R(o.rid); return Math.max(0, Math.round((etaOf(r)[1] * 60 - Math.min((Date.now() - o.createdAt) / 1000, etaOf(r)[1] * 60)) / 60)); };
 const RIDER = { name: 'Marco Reyes', phone: '09181234567', vehicle: 'Motorcycle' };
@@ -278,7 +283,7 @@ function mergeStore() { let st; try { st = JSON.parse(localStorage.getItem(KEY))
   (st.notes || []).forEach(n => { if (!S.notes.find(x => x.id === n.id)) { S.notes.push(n); ch = true; } }); S.notes.sort((a, b) => b.at - a.at);
   if (ch) { save(); updateChrome(); if (/^\/(orders|order\/|notifications|catering)/.test(curPath()) && !sheetEl && !/INPUT|TEXTAREA|SELECT/.test((document.activeElement || {}).tagName)) render(); } return ch; }
 window.addEventListener('storage', e => { if (e.key === KEY) mergeStore(); });
-setInterval(() => { mergeStore(); let ch = false; S.orders.forEach(o => { const s = stageOf(o); if (s >= 0 && (o.notified ?? -1) < s) { o.notified = s; if (s > 0) notify('order', `${STEPS[s][0]} · ${o.id}`, STEPS[s][1], o.uid || 'demo'); ch = true; } }); if (ch) { save(); updateChrome(); } }, 2000);
+setInterval(() => { mergeStore(); let ch = false; S.orders.filter(o => o.demo !== false).forEach(o => { const s = stageOf(o); if (s >= 0 && (o.notified ?? -1) < s) { o.notified = s; if (s > 0) notify('order', `${STEPS[s][0]} · ${o.id}`, STEPS[s][1], o.uid || 'demo'); ch = true; } }); if (ch) { save(); updateChrome(); } }, 2000);
 
 /* ---------- services ---------- */
 const Gateway = { async pay(order, method) {            // payment adapter: demo now, server endpoint in production
@@ -654,6 +659,51 @@ function printReceipt(id) { const o = ORD(id); if (!o) return; const old = $('#p
 /* ---------- tracking ---------- */
 const PATH = 'M60 210 L60 130 L210 130 L210 70 L340 70';
 V.track = id => { let o = ORD(id); if (!o) return V.notFound(); const r = R(o.rid);
+  if (o.demo === false) {
+    const statuses = [
+      ['pending','Order received','Waiting for the store to accept your order.'],
+      ['confirmed','Order accepted','The store has confirmed your order.'],
+      ['preparing','Preparing your food','Your order is being prepared.'],
+      ['ready','Ready','Your order is ready for pickup or rider handoff.'],
+      ['out_for_delivery','Out for delivery','Your order is on its way.'],
+      ['completed','Completed','Your order has been completed.']
+    ];
+    const make = () => {
+      const idx = statuses.findIndex(x => x[0] === o.status);
+      const cancelled = o.status === 'cancelled';
+      return `${pageHead('Track order', true, `<span class="chip">${esc(o.id)}</span>`)}
+        <div class="panel"><h2>${cancelled ? 'Order cancelled' : (statuses[Math.max(idx,0)]?.[1] || 'Order update')}</h2>
+        <p class="mu sm">From ${esc(r?.name || 'Store')} · Status from Supabase</p></div>
+        <div class="panel"><ol class="tl">${cancelled
+          ? `<li class="cur"><b>Cancelled</b><div class="sm">This order was cancelled.</div></li>`
+          : statuses.map(([key,title,detail],i)=>`<li class="${i<=idx?'done':''} ${i===idx?'cur':''}">
+              <span class="b">${ic(i<=idx?'check':'clock',16)}</span><div><b>${title}</b><div class="sm">${detail}</div></div></li>`).join('')}
+        </ol></div>
+        <div class="panel"><b>Delivering to</b><p>${esc(o.addr || 'Address on order')}</p>
+        <div class="row sp"><b>Total</b><b>${peso(o.total)}</b></div></div>`;
+    };
+    return {html:`<section class="view" id="trk">${make()}</section>`,after:()=>{
+      // Poll server as fallback even if Supabase Realtime is not enabled.
+      let busy=false;
+      const sync=async()=>{
+        if(busy || curPath() !== '/track/'+id) return;
+        busy=true;
+        try {
+          const db=window.PAPALITA_DB;
+          if(!db) return;
+          const {data,error}=await db.from('orders').select('id,status,updated_at').eq('id',id).single();
+          if(error) throw error;
+          if(data && data.status!==o.status){
+            o.status=data.status; o.upd=Date.parse(data.updated_at)||Date.now();
+            save(); const el=$('#trk'); if(el) el.innerHTML=make();
+            updateChrome();
+          }
+        }catch(e){console.warn('[Papalita] Tracking refresh:',e.message)}
+        finally{busy=false}
+      };
+      sync(); timers.push(setInterval(sync,5000));
+    }};
+  }
   const html = () => { const s = stageOf(o), done = s === 5, can = s < 0;
     return `${pageHead('Track order', true, `<span class="chip">${o.id}</span>`)}<div class="two-col"><div><div class="mapbox" aria-label="Delivery route preview"><svg viewBox="0 0 400 260" role="img" aria-label="Map preview of the delivery route"><rect width="400" height="260" fill="#EAF2E8"/><g stroke="#fff" stroke-width="14" fill="none"><path d="M0 130H400M210 0V260M60 0V260M0 210H400M340 0V260M0 70H400"/></g><path d="${PATH}" stroke="#087F32" stroke-width="5" fill="none" stroke-dasharray="2 9" stroke-linecap="round"/><g transform="translate(60 210)"><circle r="14" fill="#fff"/><path d="M-6-3h12v9h-12zM-8-3l2-6h12l2 6" fill="#087F32"/></g><g transform="translate(340 70)"><circle r="14" fill="#101318"/><path d="M-6 1l6-6 6 6v6h-12z" fill="#fff"/></g><g id="rider" transform="translate(60 210)"><circle r="12" fill="#087F32" stroke="#fff" stroke-width="3"/><circle r="4" fill="#fff"/></g></svg></div>
   <p class="sm mu" style="margin:8px 4px">Schematic route preview. ${C.maps.provider === 'none' ? 'Add a Mapbox or Google Maps token in <code>js/config.js</code> for a live map.' : 'Live map provider configured.'}</p>
