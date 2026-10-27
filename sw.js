@@ -1,6 +1,7 @@
-/* Papalita PWA — aligned with manifest v2 icons */
-const CACHE = 'papalita-static-20261027-install-v2';
-const APP_SHELL = ['./', './index.html', './manifest.webmanifest', './images/papalita-icon-192-v2.png', './images/papalita-icon-512-v2.png'];
+/* Papalita PWA — push-capable service worker */
+const CACHE = 'papalita-static-20261027-push-v3';
+const APP_SHELL = ['./', './index.html', './manifest.webmanifest',
+  './images/papalita-icon-192-v2.png', './images/papalita-icon-512-v2.png'];
 self.addEventListener('install', event => {
   event.waitUntil((async () => {
     const cache = await caches.open(CACHE);
@@ -30,29 +31,36 @@ self.addEventListener('fetch', event => {
       }
       return res;
     } catch(e) {
-      return await caches.match(req) || (req.mode === 'navigate' ? await caches.match('./index.html') : null) || Response.error();
+      return await caches.match(req) ||
+        (req.mode === 'navigate' ? await caches.match('./index.html') : null) ||
+        Response.error();
     }
   })());
 });
 self.addEventListener('push', event => {
   let data = {};
-  try { data = event.data ? event.data.json() : {}; } catch(e) { data = {body:event.data?.text() || ''}; }
-  const title = String(data.title || 'Papalita');
+  try { data = event.data ? event.data.json() : {}; }
+  catch(e) { data = {body:event.data?.text() || ''}; }
+  const orderId = typeof data.order_id === 'string' && /^[0-9a-f-]{36}$/i.test(data.order_id)
+    ? data.order_id : null;
+  const safeUrl = orderId ? './#/track/' + orderId :
+    typeof data.url === 'string' && /^\.\/#\/(orders|notifications|track\/[0-9a-f-]{36})$/i.test(data.url)
+      ? data.url : './#/orders';
   const options = {
     body: String(data.body || 'You have an order update.'),
     icon: './images/papalita-icon-192-v2.png',
     badge: './images/papalita-icon-192-v2.png',
-    tag: String(data.tag || data.order_id || 'papalita-update'),
-    data: {url: typeof data.url === 'string' && data.url.startsWith('./') ? data.url : './#/orders'}
+    tag: String(data.tag || orderId || 'papalita-update'),
+    data: {url: safeUrl}
   };
-  event.waitUntil(self.registration.showNotification(title, options));
+  event.waitUntil(self.registration.showNotification(String(data.title || 'Papalita'), options));
 });
 self.addEventListener('notificationclick', event => {
   event.notification.close();
   event.waitUntil((async () => {
     const target = new URL(event.notification.data?.url || './#/orders', self.registration.scope).href;
-    const clientsList = await clients.matchAll({type:'window',includeUncontrolled:true});
-    const existing = clientsList.find(c => c.url.startsWith(self.registration.scope));
+    const openClients = await clients.matchAll({type:'window',includeUncontrolled:true});
+    const existing = openClients.find(c => c.url.startsWith(self.registration.scope));
     if (existing) { await existing.navigate(target); return existing.focus(); }
     return clients.openWindow(target);
   })());
