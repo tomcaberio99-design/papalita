@@ -534,7 +534,24 @@ function papaReports(){
  <div class="papa-kpis">${papaKpi('Sales today',peso(total(daily)),'Completed orders')}${papaKpi('This week',peso(total(weekly)),'Since Monday')}${papaKpi('This month',peso(total(monthly)),'Current calendar month')}${papaKpi('Completed orders',String(completed.length),'In loaded order history')}</div>
  <div class="papa-columns"><section class="papa-card"><h2>📊 Sales performance</h2><p class="papa-muted">Last 7 days · completed orders</p><div class="papa-sales-bars">${days.map(x=>`<div class="papa-sales-day" title="${esc(x.label)}: ${esc(peso(x.amount))}"><div class="bar" style="height:${Math.max(3,Math.round(x.amount/max*170))}px"></div><small>${esc(x.label)}</small></div>`).join('')}</div><p class="papa-sales-note">Sales use completed orders only. Values are based on the most recent loaded orders (up to 100), not a full accounting ledger.</p></section><section class="papa-card"><h2>🏆 Top-selling products</h2><p class="papa-muted">By quantity in completed orders</p><div class="papa-sales-list">${top.length?top.map(([name,qty],i)=>`<div class="papa-sales-item"><span>${i+1}. ${esc(name)}</span><strong>${qty} sold</strong></div>`).join(''):'<p class="papa-muted">No completed product sales in loaded orders yet.</p>'}</div></section></div>`;
 }
-function papaSettings(){const st=papaStore();return `<div class="papa-heading"><div><h1>Settings</h1><p>Manage store availability and account settings.</p></div></div><div class="papa-card"><h2>Store availability</h2><label class="papa-toggle"><input type="checkbox" id="papa-open-toggle" ${st.is_open!==false?'checked':''}> Accepting orders (store open)</label><p class="papa-muted">This setting is saved to Supabase. The customer app must read this field to enforce closed-store checkout.</p><button class="btn p" id="papa-save-settings">Save availability</button></div><div class="papa-card"><h2>Store identity</h2><p class="papa-muted">Store name, contact, logo, cover photo and hours are editable in Store Profile.</p><button class="btn s" data-jump="profile">Go to Store Profile</button></div>`;}
+function papaSettings(){
+ const st=papaStore(),closed=st.is_open===false;
+ const options=['Emergency','Power interruption','Out of stock','Staff unavailable','Others'];
+ const current=st.closure_reason||'Emergency';
+ const selected=options.includes(current)?current:'Others';
+ return `<div class="papa-heading"><div><h1>Store Settings</h1><p>Control store availability in real time.</p></div></div>
+ <div class="papa-card"><h2>Store Availability</h2>
+ <p><span class="status ${closed?'closed':'open'}">${closed?'Temporarily Closed':'Open for Orders'}</span></p>
+ <p class="papa-muted">An emergency closure blocks new orders once customer checkout is connected to live store availability. Existing orders are not automatically cancelled.</p>
+ <div class="field"><label for="papa-closure-reason">Closure Reason</label>
+ <select class="in" id="papa-closure-reason">${options.map(x=>`<option value="${esc(x)}" ${selected===x?'selected':''}>${esc(x)}</option>`).join('')}</select></div>
+ <div class="field" id="papa-closure-other-wrap" ${selected==='Others'?'':'hidden'}><label for="papa-closure-other">Specify reason</label>
+ <textarea class="in" id="papa-closure-other" maxlength="200" placeholder="Enter closure reason…">${selected==='Others'?esc(options.includes(current)?'':current):''}</textarea></div>
+ <button class="btn ${closed?'p':'d'}" id="papa-emergency-toggle">${closed?'Reopen Store':'Emergency Close Store'}</button>
+ ${closed?`<p class="papa-muted">Closed since: ${st.temporarily_closed_at?esc(new Date(st.temporarily_closed_at).toLocaleString('en-PH',{timeZone:'Asia/Manila'})):'—'} · ${esc(st.closure_reason||'')}</p>`:''}
+ </div><div class="papa-card"><h2>Store Profile</h2><p class="papa-muted">Edit your contact, photos and opening hours in Store Profile.</p><button class="btn s" data-jump="profile">Go to Store Profile</button></div>`;
+}
+
 async function papaUpload(file,kind){if(!file)return null;if(file.size>5*1024*1024)throw Error('Photo must be 5 MB or smaller');const ext={'image/jpeg':'jpg','image/png':'png','image/webp':'webp'}[file.type];if(!ext)throw Error('Please use JPEG, PNG or WebP');const path=`${storeUuid}/${kind}-${crypto.randomUUID()}.${ext}`;const q=await db.storage.from('store-images').upload(path,file,{contentType:file.type,upsert:false});if(q.error)throw Error('Photo upload failed: '+q.error.message+' (check store-images Storage RLS)');return db.storage.from('store-images').getPublicUrl(path).data.publicUrl;}
 async function papaBind(){
  $$('[data-papa-filter]').forEach(b=>b.onclick=()=>{papaOrderFilter=b.dataset.papaFilter;draw()});
@@ -545,7 +562,22 @@ async function papaBind(){
  const typeSelect=$('#papa-type');if(typeSelect)typeSelect.onchange=()=>{const field=$('#papa-catering-setting');if(field){const allowed=papaCateringEligible({business_type:typeSelect.value});field.hidden=!allowed;if(!allowed)$('#papa-catering-enabled').checked=false;}};
  const form=$('#papa-profile-form');if(form)form.onsubmit=async e=>{e.preventDefault();const btn=$('#papa-save-profile');btn.disabled=true;const err=$('#papa-profile-error');err.textContent='';try{const phone=$('#papa-phone').value.trim();if(phone&&!/^(09\d{9}|\+639\d{9})$/.test(phone))throw Error('Enter a valid Philippine mobile number');const changes={name:$('#papa-name').value.trim(),business_type:$('#papa-type').value,catering_enabled:papaCateringEligible({business_type:$('#papa-type').value})&&$('#papa-catering-enabled').checked,description:$('#papa-description').value.trim(),address:$('#papa-address').value.trim(),phone,open_time:$('#papa-open').value,close_time:$('#papa-close').value};if(!changes.name||!changes.address)throw Error('Name and address are required');const logo=await papaUpload($('#papa-logo-file').files[0],'logo');const cover=await papaUpload($('#papa-cover-file').files[0],'cover');if(logo)changes.logo_url=logo;if(cover)changes.cover_url=cover;const q=await db.from('stores').update(changes).eq('id',storeUuid).eq('status','approved').select('*').single();if(q.error)throw q.error;Object.assign(papaStore(),q.data);toast('Store profile saved!');draw()}catch(ex){err.textContent=ex.message}finally{btn.disabled=false}};
  $$('[data-save-stock]').forEach(b=>b.onclick=async()=>{const tr=b.closest('tr');const stock=Number(tr.querySelector('[data-stock]').value),threshold=Number(tr.querySelector('[data-threshold]').value);if(!Number.isInteger(stock)||stock<0||!Number.isInteger(threshold)||threshold<0)return toast('Enter valid nonnegative whole numbers');b.disabled=true;try{const q=await db.from('products').update({stock,low_stock_threshold:threshold}).eq('id',tr.dataset.invId).eq('store_id',storeUuid).select('id');if(q.error)throw q.error;if(!q.data?.length)throw Error('Update blocked by RLS');toast('Stock updated');await papaLoad()}catch(e){toast(e.message)}finally{b.disabled=false}});
- const save=$('#papa-save-settings');if(save)save.onclick=async()=>{save.disabled=true;try{const q=await db.from('stores').update({is_open:$('#papa-open-toggle').checked}).eq('id',storeUuid).eq('status','approved').select('*').single();if(q.error)throw q.error;Object.assign(papaStore(),q.data);toast('Store availability saved')}catch(e){toast(e.message)}finally{save.disabled=false}};
+ const reasonSelect=$('#papa-closure-reason');
+ if(reasonSelect)reasonSelect.onchange=()=>{$('#papa-closure-other-wrap').hidden=reasonSelect.value!=='Others'};
+ const toggle=$('#papa-emergency-toggle');
+ if(toggle)toggle.onclick=async()=>{
+   const opening=papaStore().is_open===false;
+   const reason=reasonSelect.value==='Others'?$('#papa-closure-other').value.trim():reasonSelect.value;
+   if(!opening&&(!reason||reason.length>200))return toast('Please enter a closure reason (up to 200 characters).');
+   if(!confirm(opening?'Reopen this store and accept new orders?':'Temporarily close your store? New orders should be blocked.'))return;
+   toggle.disabled=true;
+   try{
+     const q=await db.rpc('papalita_set_store_availability',{p_store_id:storeUuid,p_open:opening,p_reason:opening?null:reason});
+     if(q.error)throw q.error;
+     Object.assign(papaStore(),q.data);
+     toast(opening?'Store reopened':'Store temporarily closed');draw();
+   }catch(e){toast('Availability update failed: '+e.message);toggle.disabled=false;}
+ };
 }
 function draw(){if(!storeUuid)return gate();if(tab==='cat'&&!papaCateringOn(papaStore()))tab='dashboard';const content=tab==='dashboard'?papaDashboard():tab==='profile'?papaProfile():tab==='menu'?'<div id="papalita-products" class="papa-card">Loading products...</div>':tab==='inventory'?papaInventory():tab==='orders'?papaOrders():tab==='reports'?papaReports():tab==='settings'?papaSettings():`<div class="papa-heading"><div><h1>Catering Requests</h1><p>Manage your Supabase catering inquiries.</p></div><button class="btn s" id="papa-catering-refresh">↻ Refresh</button></div>${realCateringHTML()}`;papaShell(content);papaBind();if(tab==='menu')renderSellerProducts();if(tab==='cat'){$$('[data-real-status]').forEach(el=>el.onchange=async()=>{try{await updateCatering(el.dataset.realStatus,el.value)}catch(e){toast(e.message)}});const b=$('#papa-catering-refresh');if(b)b.onclick=async()=>{await fetchCatering();draw()}}}
 async function papaLoad(){const seq=++papaLoadSeq;try{await papaFetchProducts();if(seq===papaLoadSeq)draw();if(seq===papaLoadSeq&&tab==='orders')await papaFetchOrders()}catch(e){toast('Products: '+e.message);if(seq===papaLoadSeq)draw()}}
