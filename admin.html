@@ -615,6 +615,7 @@ const TABS=[
   ['fees','Delivery fees',1],
   ['stores','Store contacts'],
   ['applications','Store approvals',1],
+  ['availability','Store availability',1],
   ['inventory','All products (Supabase)',1],
   ['analytics','Analytics']
 ];
@@ -633,6 +634,7 @@ const ICONS={
   fees:'🛵',
   stores:'📞',
   applications:'🏪',
+  availability:'🚨',
   inventory:'🍔',
   analytics:'📈'
 };
@@ -694,6 +696,33 @@ const H=(t,b='')=>$('#b').innerHTML=
   </div><div id="c"></div>`;
 
 const V={
+  async availability(){
+    H('Store Availability');
+    const el=$('#c');
+    if(sess.role!=='platform'){el.textContent='Platform admin only';return;}
+    const db=getAuthClient();
+    const render=async()=>{
+      const q=await db.from('stores').select('id,name,status,is_open,closure_reason,temporarily_closed_at,updated_at').order('name');
+      if(q.error)throw q.error;
+      const rows=q.data||[];
+      el.innerHTML=`<div class="note" style="margin-bottom:16px">Live store availability from Supabase. Only store owners can close/reopen their stores. Updates refresh automatically while this tab is open.</div>
+      <div class="row sp wrap" style="margin-bottom:14px"><div><b>${rows.filter(x=>x.status==='approved'&&x.is_open===false).length}</b> temporarily closed stores</div><button class="btn s sm" id="availability-refresh">Refresh</button></div>
+      <div class="tw"><table><thead><tr><th>Store</th><th>Approval</th><th>Availability</th><th>Reason</th><th>Closed at (PH)</th></tr></thead><tbody>
+      ${rows.map(s=>`<tr><td><b>${esc(s.name)}</b></td><td>${esc(s.status)}</td><td><span class="status ${s.is_open===false?'closed':'open'}">${s.is_open===false?'Temporarily Closed':'Open flag'}</span></td><td>${esc(s.closure_reason||'—')}</td><td>${s.temporarily_closed_at?esc(new Date(s.temporarily_closed_at).toLocaleString('en-PH',{timeZone:'Asia/Manila'})):'—'}</td></tr>`).join('')||'<tr><td colspan="5">No stores.</td></tr>'}</tbody></table></div>`;
+      $('#availability-refresh').onclick=()=>render().catch(e=>toast(e.message));
+    };
+    try{await render();
+      if(window.papalitaAvailabilityChannel)db.removeChannel(window.papalitaAvailabilityChannel);
+      window.papalitaAvailabilityChannel=db.channel('admin-store-availability')
+        .on('postgres_changes',{event:'UPDATE',schema:'public',table:'stores'},()=>{
+          if(tab==='availability')void render().catch(e=>toast(e.message));
+        }).subscribe();
+      if(window.papalitaAvailabilityTimer)clearInterval(window.papalitaAvailabilityTimer);
+      window.papalitaAvailabilityTimer=setInterval(()=>{
+        if(tab==='availability'&&document.visibilityState==='visible')void render().catch(e=>toast(e.message));
+      },15000);
+    }catch(e){el.textContent='Unable to load store availability: '+e.message;}
+  },
   async finance(){
     H('Finance & Payouts <span class="demo">TEST ONLY</span>');
     const el=$('#c');
