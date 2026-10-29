@@ -610,6 +610,7 @@ const TABS=[
   ['users','Users',1],
   ['catering','Catering requests'],
   ['cash','Cash remittance',1],
+  ['finance','Finance & Payouts',1],
   ['refunds','Refund queue',1],
   ['fees','Delivery fees',1],
   ['stores','Store contacts'],
@@ -627,6 +628,7 @@ const ICONS={
   users:'👥',
   catering:'🎉',
   cash:'💵',
+  finance:'💳',
   refunds:'↩️',
   fees:'🛵',
   stores:'📞',
@@ -692,6 +694,98 @@ const H=(t,b='')=>$('#b').innerHTML=
   </div><div id="c"></div>`;
 
 const V={
+  async finance(){
+    H('Finance & Payouts <span class="demo">TEST ONLY</span>');
+    const el=$('#c');
+    if(sess.role!=='platform'){el.textContent='Platform admin only.';return;}
+    el.innerHTML='<div class="panel">Loading settlement data from Supabase…</div>';
+    const db=getAuthClient();
+    const money=v=>'₱'+Number(v||0).toLocaleString('en-PH',{minimumFractionDigits:2,maximumFractionDigits:2});
+    const short=id=>String(id||'').slice(0,8);
+    const run=async(name,args,message)=>{
+      if(!window.confirm(message+' This is a SIMULATION; no real money is transferred.'))return;
+      try{
+        const r=await db.rpc(name,args);
+        if(r.error)throw r.error;
+        toast('Test operation successful.');
+        V.finance();
+      }catch(e){toast('Failed: '+e.message);}
+    };
+    try{
+      const q=await db.rpc('papalita_test_finance_dashboard');
+      if(q.error)throw q.error;
+      const d=q.data||{};
+      const stores=d.stores||[],os=d.orders||[],payments=d.payments||[],earnings=d.earnings||[],
+        batches=d.batches||[],items=d.items||[];
+      const storeName=id=>stores.find(s=>s.id===id)?.name||short(id);
+      const eligible=earnings.filter(e=>e.status==='eligible');
+      const paid=items.filter(i=>i.status==='paid');
+      const pending=items.filter(i=>i.status!=='paid'&&i.status!=='cancelled');
+      const sum=(arr,key)=>arr.reduce((a,x)=>a+Number(x[key]||0),0);
+      const eligibleOrders=os.filter(o=>['completed','delivered'].includes(o.status));
+      const today=new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Manila',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
+      el.innerHTML=`
+        <div class="note" style="margin-bottom:18px"><b>Simulation mode.</b> All actions use test-only Supabase RPCs. No GCash, Maya, bank transfer, or real payment verification happens here. The existing Overview/Orders tabs still use browser-local/sample data; use this tab for Supabase settlement testing.</div>
+        <div class="kpis">
+          <div class="kpi"><span class="mu">Allocated store earnings</span><b>${money(sum(eligible,'food_amount'))}</b></div>
+          <div class="kpi"><span class="mu">Allocated rider earnings</span><b>${money(sum(eligible,'delivery_amount'))}</b></div>
+          <div class="kpi"><span class="mu">Papalita service fees</span><b>${money(sum(eligible,'platform_amount'))}</b></div>
+          <div class="kpi"><span class="mu">Pending test payouts</span><b>${money(sum(pending,'amount'))}</b></div>
+        </div>
+        <div class="panel">
+          <h3>1. Simulate payment & allocate earnings</h3>
+          <p class="mu sm">Only completed/delivered orders with matching totals and no real payment transaction can be simulated. Allocation is one-time per order.</p>
+          <div class="tw"><table><thead><tr><th>Order</th><th>Store</th><th>Food / Rider / Fee</th><th>Order status</th><th>Test payment</th><th>Action</th></tr></thead>
+          <tbody>${eligibleOrders.map(o=>{
+            const tx=payments.find(p=>p.order_id===o.id&&p.method==='test');
+            const e=earnings.find(x=>x.order_id===o.id);
+            return `<tr><td title="${esc(o.id)}">${esc(short(o.id))}</td><td>${esc(storeName(o.store_id))}</td>
+              <td>${money(o.subtotal)} / ${money(o.delivery_fee)} / ${money(o.service_fee)}</td>
+              <td>${esc(o.status)}</td><td>${esc(tx?.status||'none')}</td>
+              <td>${e?'<span class="status open">Allocated</span>':tx?.status==='settled'
+                ?`<button class="btn p sm" data-allocate="${esc(o.id)}">Allocate</button>`
+                :`<button class="btn s sm" data-simulate="${esc(o.id)}">Simulate payment</button>`}</td></tr>`;
+          }).join('')||'<tr><td colspan="6">No completed orders found.</td></tr>'}</tbody></table></div>
+        </div>
+        <div class="panel">
+          <h3>2. Prepare store payout batch</h3>
+          <p class="mu sm">Cutoff: 30 minutes before closing. The selected date is the store business date (Philippine time). Past cutoff only.</p>
+          <div class="two">
+            <div class="field"><label>Approved store</label><select class="in" id="fin-store">${stores.map(s=>`<option value="${esc(s.id)}">${esc(s.name)} · ${s.is_24_hours?'24h':esc(s.close_time||'closing time unset')}</option>`).join('')}</select></div>
+            <div class="field"><label>Business date (Asia/Manila)</label><input class="in" type="date" id="fin-date" value="${esc(today)}"></div>
+          </div>
+          <button class="btn p" id="fin-prepare" ${stores.length?'':'disabled'}>Prepare test payout batch</button>
+        </div>
+        <div class="panel">
+          <h3>3. Test payout queue</h3>
+          <p class="mu sm">Marking paid records a <b>simulated</b> payout only. It does not send money.</p>
+          <div class="tw"><table><thead><tr><th>Recipient</th><th>Order</th><th>Batch date</th><th>Amount</th><th>Status</th><th>Action</th></tr></thead><tbody>
+          ${items.map(i=>{
+            const b=batches.find(x=>x.id===i.batch_id);
+            return `<tr><td>${i.recipient_type==='store'?esc(storeName(i.store_id)):'Rider '+esc(short(i.rider_id))}</td>
+            <td title="${esc(i.order_id)}">${esc(short(i.order_id))}</td><td>${esc(b?.payout_date||'—')}</td>
+            <td>${money(i.amount)}</td><td><span class="status ${i.status==='paid'?'open':'n'}">${esc(i.status)}</span></td>
+            <td>${i.status==='paid'?esc(i.transfer_reference||'Simulated paid')
+              :i.status==='cancelled'?'—':`<button class="btn s sm" data-fin-paid="${esc(i.id)}">Mark TEST paid</button>`}</td></tr>`;
+          }).join('')||'<tr><td colspan="6">No test payout items yet.</td></tr>'}</tbody></table></div>
+        </div>
+        <p class="mu sm">Showing up to 100 recent orders/payments/earnings/batches and 200 payout items. These are test records, not a reconciled financial statement.</p>`;
+      $$('[data-simulate]',el).forEach(b=>b.onclick=()=>run('papalita_simulate_order_payment',{p_order_id:b.dataset.simulate},'Simulate payment for order '+short(b.dataset.simulate)+'?'));
+      $$('[data-allocate]',el).forEach(b=>b.onclick=()=>run('papalita_allocate_test_earnings',{p_order_id:b.dataset.allocate},'Allocate earnings for order '+short(b.dataset.allocate)+'?'));
+      $('#fin-prepare').onclick=()=>{
+        const storeId=$('#fin-store').value,date=$('#fin-date').value;
+        if(!storeId||!date)return toast('Select store and business date.');
+        run('papalita_prepare_test_payout',{p_store_id:storeId,p_local_date:date},'Prepare payout batch for '+storeName(storeId)+' on '+date+'?');
+      };
+      $$('[data-fin-paid]',el).forEach(b=>b.onclick=()=>{
+        const ref=window.prompt('Enter a TEST reference (at least 4 characters). No money will be sent:');
+        if(ref===null)return;
+        if(ref.trim().length<4)return toast('Reference must have at least 4 characters.');
+        run('papalita_mark_test_payout_paid',{p_item_id:b.dataset.finPaid,p_reference:ref.trim()},'Mark this payout as TEST paid?');
+      });
+    }catch(e){el.innerHTML='<div class="panel"><h3>Finance module unavailable</h3><p class="err"></p><p class="mu sm">Run papalita_finance_dashboard_v3.sql after v1/v2, then sign in with an admin role.</p></div>';$('.err',el).textContent=e.message;}
+  },
+
   async inventory(){
     H('All products · Supabase');
     if(sess.role!=='platform'){$('#c').textContent='Admin access required';return;}
